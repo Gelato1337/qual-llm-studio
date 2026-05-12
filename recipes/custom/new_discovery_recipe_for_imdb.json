@@ -1,0 +1,50 @@
+{
+  "name": "new_discovery_recipe_for_imdb",
+  "type": "custom_extract",
+  "description": "Free-form aspect extraction. The model invents its own aspect labels — useful as the first pass of a two-pass pipeline. Run this on a small sample, look at which labels come up most often, then build a clean taxonomy for Pass 2.",
+  "tier": 1,
+  "inputs": {
+    "target": "text"
+  },
+  "prompt": "Extract aspects discussed in this text.\n\nFor each aspect return an object with:\n- \"aspect\": short name (e.g. \"acting\", \"scene transitions\", \"cinematography\")\n- \"sentiment\": \"positive\", \"negative\", or \"neutral\"\n- \"quote\": short supporting quote from the text\n\nReturn JSON: {\"aspects\": [ ... ]}\n\nTEXT:\n{target}",
+  "output": {
+    "shape": "list",
+    "list_key": "aspects",
+    "fields": [
+      {
+        "name": "aspect",
+        "type": "text",
+        "description": "Short label for the aspect",
+        "required": true,
+        "item_type": "text"
+      },
+      {
+        "name": "sentiment",
+        "type": "enum",
+        "required": true,
+        "allowed": [
+          "positive",
+          "negative",
+          "neutral"
+        ],
+        "item_type": "text"
+      },
+      {
+        "name": "quote",
+        "type": "text",
+        "description": "Supporting quote from the source",
+        "required": true,
+        "item_type": "text"
+      }
+    ]
+  },
+  "on_invalid": {
+    "max_retries": 5,
+    "fallback": "drop"
+  },
+  "tags": [
+    "workshop",
+    "two-pass",
+    "discovery"
+  ]
+}

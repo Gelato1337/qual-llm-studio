@@ -1,0 +1,20 @@
+{
+  "name": "codify_themes",
+  "type": "custom_extract",
+  "description": "Two-pass theme discovery: this is the second pass. Apply a fixed set of theme codes (developed from a Pass 1 discovery run) to each document. Each document can have multiple themes.",
+  "inputs": {
+    "target": "text"
+  },
+  "prompt": "Apply theme codes to the text below.\n\nTEXT:\n{{text}}\n\nCODEBOOK (edit this for your study):\n- frustration: expressions of frustration, anger, or annoyance\n- gratitude: expressions of thanks, appreciation, or relief\n- confusion: indications the speaker doesn't understand or is uncertain\n- agency: speaker takes initiative, makes choices, asserts control\n- vulnerability: speaker admits weakness, fear, dependence, or need\n- belonging: references to community, family, group identity\n\nFor each theme that appears in the text, return:\n- theme: the code name (must match exactly)\n- evidence: a short quoted phrase from the text that supports this code\n- strength: 'weak', 'moderate', or 'strong'\n\nIf a theme doesn't appear, omit it. If NO themes appear, return {\"themes\": []}.\n\nReturn JSON:\n\n{\n  \"themes\": [\n    {\"theme\": \"frustration\", \"evidence\": \"<short quote>\", \"strength\": \"strong\"},\n    ...\n  ]\n}",
+  "output": {
+    "shape": "list",
+    "list_key": "themes",
+    "fields": [
+      {"name": "theme", "type": "enum", "allowed": ["frustration", "gratitude", "confusion", "agency", "vulnerability", "belonging"]},
+      {"name": "evidence", "type": "text", "description": "Short supporting quote"},
+      {"name": "strength", "type": "enum", "allowed": ["weak", "moderate", "strong"]}
+    ]
+  },
+  "on_invalid": {"max_retries": 3, "fallback": "keep_with_warning"},
+  "tags": ["coding", "workshop"]
+}

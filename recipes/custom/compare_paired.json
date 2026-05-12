@@ -1,0 +1,20 @@
+{
+  "name": "compare_paired",
+  "type": "custom_extract",
+  "description": "Pairwise comparison: for each row, compare two text fields and pick which one better fits a criterion. Useful for A/B preference judgments. Edit the criterion in the prompt.",
+  "inputs": {
+    "target": "text_a",
+    "compare": "text_b"
+  },
+  "prompt": "Compare two texts on a specific criterion.\n\nTEXT A:\n{{text_a}}\n\nTEXT B:\n{{text_b}}\n\nCRITERION (edit this for your study):\nWhich text shows MORE EMPATHY toward the reader/listener?\n\nReturn JSON:\n\n{\n  \"winner\": \"A\" or \"B\" or \"tie\",\n  \"confidence\": <integer 0-100>,\n  \"reason\": \"<one sentence explaining why>\"\n}\n\nGuidance:\n- 'tie' should be rare — only when truly indistinguishable.\n- confidence 0-30 = weak signal, 30-70 = moderate, 70-100 = strong.\n- The reason must reference specific elements of both texts.",
+  "output": {
+    "shape": "object",
+    "fields": [
+      {"name": "winner", "type": "enum", "allowed": ["A", "B", "tie"]},
+      {"name": "confidence", "type": "number", "min": 0, "max": 100},
+      {"name": "reason", "type": "text"}
+    ]
+  },
+  "on_invalid": {"max_retries": 3, "fallback": "keep_with_warning"},
+  "tags": ["comparison", "workshop"]
+}

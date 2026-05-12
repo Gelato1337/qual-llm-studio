@@ -1,0 +1,20 @@
+{
+  "name": "extract_entities",
+  "type": "custom_extract",
+  "description": "Extract named entities (people, organizations, places, etc.) with their types. One row per entity per document.",
+  "inputs": {
+    "target": "text"
+  },
+  "prompt": "Extract all named entities from the text below.\n\nTEXT:\n{{text}}\n\nEntity types:\n- person: a named individual (e.g. \"Maria Hernandez\")\n- org: an organization, company, or institution (e.g. \"University of Helsinki\")\n- place: a location, city, country, or geographic feature\n- event: a named event (e.g. \"World Cup\", \"COVID pandemic\")\n- other: anything proper-noun-ish that doesn't fit above\n\nFor each entity, return:\n- name: the entity as it appears in the text (don't normalize spelling)\n- type: one of person, org, place, event, other\n- mentions: how many times the entity appears in this text\n\nReturn JSON:\n\n{\n  \"entities\": [\n    {\"name\": \"...\", \"type\": \"person\", \"mentions\": 1},\n    ...\n  ]\n}\n\nIf no entities are present, return {\"entities\": []}. Don't invent entities not present in the text.",
+  "output": {
+    "shape": "list",
+    "list_key": "entities",
+    "fields": [
+      {"name": "name", "type": "text", "description": "Entity surface form"},
+      {"name": "type", "type": "enum", "allowed": ["person", "org", "place", "event", "other"]},
+      {"name": "mentions", "type": "number", "min": 1, "description": "Number of mentions in this text"}
+    ]
+  },
+  "on_invalid": {"max_retries": 3, "fallback": "drop"},
+  "tags": ["extraction", "workshop"]
+}

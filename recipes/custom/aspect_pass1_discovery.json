@@ -1,0 +1,24 @@
+{
+  "name": "aspect_pass1_discovery",
+  "type": "custom_extract",
+  "tier": 1,
+  "description": "Free-form aspect extraction. The model invents its own aspect labels — useful as the first pass of a two-pass pipeline. Run this on a small sample, look at which labels come up most often, then build a clean taxonomy for Pass 2.",
+  "inputs": {
+    "target": "text"
+  },
+  "prompt": "Extract aspects discussed in this text.\n\nFor each aspect return an object with:\n- \"aspect\": short name (e.g. \"acting\", \"plot\", \"music\")\n- \"sentiment\": \"positive\", \"negative\", or \"neutral\"\n- \"quote\": short supporting quote from the text\n\nReturn JSON: {\"aspects\": [ ... ]}\n\nTEXT:\n{target}",
+  "output": {
+    "shape": "list",
+    "list_key": "aspects",
+    "fields": [
+      {"name": "aspect", "type": "text", "description": "Short label for the aspect"},
+      {"name": "sentiment", "type": "enum", "allowed": ["positive", "negative", "neutral"]},
+      {"name": "quote", "type": "text", "description": "Supporting quote from the source"}
+    ]
+  },
+  "on_invalid": {
+    "max_retries": 5,
+    "fallback": "drop"
+  },
+  "tags": ["workshop", "two-pass", "discovery"]
+}

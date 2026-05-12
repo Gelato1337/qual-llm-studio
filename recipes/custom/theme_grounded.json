@@ -1,0 +1,44 @@
+{
+  "name": "theme_grounded",
+  "type": "custom_extract",
+  "tier": 1,
+  "description": "Extract themes with summaries and supporting quotes, then verify the quotes actually appear in the source via 90% fuzzy match. Hallucinated quotes get flagged with grounded=false.",
+  "inputs": {
+    "target": "text"
+  },
+  "prompt": "Extract the main themes from this text.\n\nFor each theme return:\n- \"theme\": short name\n- \"summary\": 1-2 sentence summary of the theme in this text\n- \"quote\": EXACT word-for-word quote from the text (copied, not paraphrased)\n- \"keywords\": list of 3-5 relevant keywords\n\nReturn JSON: {\"themes\": [ ... ]}\n\nTEXT:\n{target}",
+  "output": {
+    "shape": "list",
+    "list_key": "themes",
+    "fields": [
+      {"name": "theme", "type": "text"},
+      {"name": "summary", "type": "text"},
+      {"name": "quote", "type": "text"},
+      {"name": "keywords", "type": "list", "min": 3, "max": 5, "description": "3-5 relevant keywords"}
+    ]
+  },
+  "on_invalid": {
+    "max_retries": 5,
+    "fallback": "keep_with_warning"
+  },
+  "post_process": [
+    {
+      "type": "ground_quotes",
+      "params": {
+        "quote_field": "quote",
+        "source_field": "target",
+        "threshold": 90
+      }
+    }
+  ],
+  "eval": {
+    "stratify_by": "grounded",
+    "judge_label_options": ["good", "spurious_theme", "bad_summary", "bad_quote"],
+    "human_judge_prompt": "Is this theme actually present in the source? Is the summary faithful? Is the quote real and supportive?",
+    "llm_judge": {
+      "criteria": "Decide if the extracted theme is faithful to the source text. A 'correct' theme is supported by the source AND has an accurate quote. An 'incorrect' theme is invented, has a hallucinated quote, or has a misleading summary.",
+      "label_options": ["correct", "incorrect"]
+    }
+  },
+  "tags": ["workshop", "themes", "grounded"]
+}

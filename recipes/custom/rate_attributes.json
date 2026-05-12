@@ -1,0 +1,20 @@
+{
+  "name": "rate_attributes",
+  "type": "custom_extract",
+  "description": "Score each document 0-100 on a set of plain-English attributes. Output: one row per document with one column per attribute. Edit the prompt to change which attributes you measure.",
+  "inputs": {
+    "target": "text"
+  },
+  "prompt": "Read the text below carefully — start, middle, end. Don't skim.\n\nTEXT:\n{{text}}\n\nFor each attribute below, rate how strongly the text manifests it on a 0-100 scale.\n\nATTRIBUTES (edit this list to match your study):\n- enthusiasm: How enthusiastic or excited the speaker sounds\n- emotional_intensity: How emotionally charged the text is (positive or negative)\n- specificity: How specific and concrete the language is, vs vague or abstract\n- recommendation_strength: How strongly the text recommends or warns against something\n\nRating guidance:\n- Use the FULL 0-100 range. Don't cluster at 0/50/100.\n- Use intermediate values like 17, 43, 81 to capture nuance.\n- Near 0 only if the attribute is genuinely absent.\n- Near 100 only if the attribute is overwhelming.\n- Judge each attribute independently — don't let one influence another.\n- Measure direct evidence in the text, not what's implied by other attributes.\n\nReturn JSON in this exact format (one key per attribute):\n\n{\n  \"enthusiasm\": <integer 0-100>,\n  \"emotional_intensity\": <integer 0-100>,\n  \"specificity\": <integer 0-100>,\n  \"recommendation_strength\": <integer 0-100>\n}\n\nUse the attribute names exactly as written. No explanation, just JSON.",
+  "output": {
+    "shape": "object",
+    "fields": [
+      {"name": "enthusiasm", "type": "number", "min": 0, "max": 100, "description": "0-100 scale"},
+      {"name": "emotional_intensity", "type": "number", "min": 0, "max": 100, "description": "0-100 scale"},
+      {"name": "specificity", "type": "number", "min": 0, "max": 100, "description": "0-100 scale"},
+      {"name": "recommendation_strength", "type": "number", "min": 0, "max": 100, "description": "0-100 scale"}
+    ]
+  },
+  "on_invalid": {"max_retries": 3, "fallback": "keep_with_warning"},
+  "tags": ["rating", "workshop"]
+}

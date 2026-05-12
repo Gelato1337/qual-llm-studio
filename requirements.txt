@@ -1,0 +1,22 @@
+# Core
+gradio>=5.0,<7
+pandas>=2.0
+pyarrow>=14.0   # parquet for workspace persistence
+requests>=2.28
+tqdm>=4.65
+
+# JSON parsing
+json_repair>=0.25
+
+# Quote grounding
+rapidfuzz>=3.0
+
+# File ingest
+pypdf>=4.0
+python-docx>=1.0
+openpyxl>=3.1   # for .xlsx via pandas
+datasets>=2.14  # for HuggingFace dataset loading
+
+# Optional: DSPy optimizer for the Advanced eval tab.
+# Comment out if you don't need prompt optimization (saves ~50MB of deps).
+dspy-ai>=2.4

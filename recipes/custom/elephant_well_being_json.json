@@ -1,0 +1,48 @@
+{
+  "name": "elephant_well_being_json",
+  "type": "custom_extract",
+  "description": "Score each document 0-100 on a set of plain-English attributes. Output: one row per document with one column per attribute. Edit the prompt to change which attributes you measure.",
+  "tier": 1,
+  "inputs": {
+    "target": "text"
+  },
+  "prompt": "Read the text below carefully — start, middle, end. Don't skim.\n\nTEXT:\n{{text}}\n\nFor each attribute below, rate how strongly the text manifests it on a 0-100 scale.\n\nATTRIBUTES (edit this list to match your study):\n- intensity: intensity of care, how much elephant requires attention\n- resources: how much resources are required\n- well_being: how well is the elephant currently doing\n- \nRating guidance:\n- Use the FULL 0-100 range. Don't cluster at 0/50/100.\n- Use intermediate values like 17, 43, 81 to capture nuance.\n- Near 0 only if the attribute is genuinely absent.\n- Near 100 only if the attribute is overwhelming.\n- Judge each attribute independently — don't let one influence another.\n- Measure direct evidence in the text, not what's implied by other attributes.\n\nReturn JSON in this exact format (one key per attribute):\n\n{\n  \"intensity\": <integer 0-100>,\n  \"resources\": <integer 0-100>,\n  \"well_being\": <integer 0-100>\n}\n\nUse the attribute names exactly as written. No explanation, just JSON.",
+  "output": {
+    "shape": "object",
+    "list_key": "items",
+    "fields": [
+      {
+        "name": "intensity",
+        "type": "number",
+        "description": "0-100 scale",
+        "required": true,
+        "max": 100,
+        "item_type": "text"
+      },
+      {
+        "name": "resources",
+        "type": "number",
+        "description": "0-100 scale",
+        "required": true,
+        "max": 100,
+        "item_type": "text"
+      },
+      {
+        "name": "well_being",
+        "type": "number",
+        "description": "0-100 scale",
+        "required": true,
+        "max": 100,
+        "item_type": "text"
+      }
+    ]
+  },
+  "on_invalid": {
+    "max_retries": 5,
+    "fallback": "drop"
+  },
+  "tags": [
+    "rating",
+    "workshop"
+  ]
+}

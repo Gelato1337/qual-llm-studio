@@ -1,0 +1,56 @@
+{
+  "name": "aspect_pass2_structured",
+  "type": "custom_extract",
+  "tier": 1,
+  "description": "Structured aspect extraction with a fixed taxonomy. Use after Pass 1 to enforce consistent labels. Edit `extra.categories` to your hand-picked taxonomy before running.",
+  "inputs": {
+    "target": "text",
+    "extra": {
+      "categories": [
+        "Acting",
+        "Plot",
+        "Directing",
+        "Cinematography",
+        "Music",
+        "Dialogue",
+        "Pacing",
+        "Emotional Impact",
+        "Comedy",
+        "Recommendation",
+        "Movie quality"
+      ]
+    }
+  },
+  "prompt": "Extract aspects from this text.\n\nYou MUST use ONLY these categories (exact spelling):\n{extra.categories}\n\nIf something doesn't fit any category, use \"Other\".\n\nFor each aspect return:\n- \"category\": one of the allowed categories\n- \"sentiment\": \"positive\", \"negative\", or \"neutral\"\n- \"quote\": short supporting quote\n\nReturn JSON: {\"aspects\": [ ... ]}\n\nTEXT:\n{target}",
+  "output": {
+    "shape": "list",
+    "list_key": "aspects",
+    "fields": [
+      {
+        "name": "category",
+        "type": "enum",
+        "allowed": [
+          "Acting",
+          "Plot",
+          "Directing",
+          "Cinematography",
+          "Music",
+          "Dialogue",
+          "Pacing",
+          "Emotional Impact",
+          "Comedy",
+          "Recommendation",
+          "Movie quality",
+          "Other"
+        ]
+      },
+      {"name": "sentiment", "type": "enum", "allowed": ["positive", "negative", "neutral"]},
+      {"name": "quote", "type": "text"}
+    ]
+  },
+  "on_invalid": {
+    "max_retries": 5,
+    "fallback": "drop"
+  },
+  "tags": ["workshop", "two-pass", "structured"]
+}

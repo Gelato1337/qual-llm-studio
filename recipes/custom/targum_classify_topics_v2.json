@@ -1,0 +1,31 @@
+{
+  "name": "targum_classify_topics_v2",
+  "type": "custom_extract",
+  "description": "Assign one or more topic labels to each document, from a fixed list. Edit the topic list in the prompt and the `allowed` field below.",
+  "tier": 1,
+  "inputs": {
+    "target": "text"
+  },
+  "prompt": "Classify the following text by which TOPICS it discusses.\n\nTEXT:\n{{text}}\n\nA document can match multiple topics. Pick all that apply, or 'other' if none fit.\n\nReturn JSON:\n\n{\n  \"topics\": [\"<topic>\", \"<topic>\", ...],\n  \"reasoning\": \"<one sentence explaining your choice>\"\n}\n\nUse topic names exactly as written. No explanation outside the JSON.",
+  "output": {
+    "shape": "object",
+    "list_key": "items",
+    "fields": [
+      {
+        "name": "reasoning",
+        "type": "text",
+        "description": "One-sentence justification",
+        "required": true,
+        "item_type": "text"
+      }
+    ]
+  },
+  "on_invalid": {
+    "max_retries": 3,
+    "fallback": "keep_with_warning"
+  },
+  "tags": [
+    "classification",
+    "workshop"
+  ]
+}
