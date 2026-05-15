@@ -421,28 +421,30 @@ def build_data_tab(
     # ---- Stage 3: Segmentation ----
     gr.Markdown("### 3. Segmentation")
     segmenter_in = gr.Dropdown(label="Strategy", choices=ingest.SEGMENTERS, value="none")
-    seg_params_in = gr.Code(label="Parameters (JSON)", language="json", value="{}", lines=4)
     segment_only_in = gr.CheckboxGroup(
         label="Apply segmentation to (uncheck to skip)",
         choices=[],
     )
-    segmenter_in.change(_on_segmenter_change, segmenter_in, seg_params_in)
 
-    with gr.Accordion("Need help building a regex? Generate a prompt for an external LLM.", open=False):
-        gr.Markdown(
-            "Paste 3+ examples of separator strings, generate a prompt, "
-            "send to ChatGPT/Claude/Gemini, paste the resulting regex back into "
-            "the Parameters JSON above."
-        )
-        with gr.Row():
-            regex_pos = gr.Textbox(label="Should match", lines=4,
-                                    placeholder="Chapter 1\nChapter 17")
-            regex_neg = gr.Textbox(label="Should NOT match (optional)", lines=4,
-                                    placeholder="Section 1")
-        regex_helper_btn = gr.Button("Generate prompt")
-        regex_helper_out = gr.Textbox(label="Copy this into ChatGPT / Claude / Gemini",
-                                       lines=12, interactive=False)
-        regex_helper_btn.click(_build_regex_helper_prompt, [regex_pos, regex_neg], regex_helper_out)
+    with gr.Accordion("Advanced segmentation options", open=False):
+        seg_params_in = gr.Code(label="Parameters (JSON)", language="json", value="{}", lines=4)
+        segmenter_in.change(_on_segmenter_change, segmenter_in, seg_params_in)
+
+        with gr.Accordion("Need help building a regex? Generate a prompt for an external LLM.", open=False):
+            gr.Markdown(
+                "Paste 3+ examples of separator strings, generate a prompt, "
+                "send to ChatGPT/Claude/Gemini, paste the resulting regex back into "
+                "the Parameters JSON above."
+            )
+            with gr.Row():
+                regex_pos = gr.Textbox(label="Should match", lines=4,
+                                        placeholder="Chapter 1\nChapter 17")
+                regex_neg = gr.Textbox(label="Should NOT match (optional)", lines=4,
+                                        placeholder="Section 1")
+            regex_helper_btn = gr.Button("Generate prompt")
+            regex_helper_out = gr.Textbox(label="Copy this into ChatGPT / Claude / Gemini",
+                                           lines=12, interactive=False)
+            regex_helper_btn.click(_build_regex_helper_prompt, [regex_pos, regex_neg], regex_helper_out)
 
     # ---- Stage 4: Sampling + Apply ----
     gr.Markdown("### 4. Build dataset")
