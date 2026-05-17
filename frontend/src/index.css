@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Canvas background */
+.react-flow__background {
+  background-color: #f9fafb;
+}
+
+/* Custom handle styling */
+.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: #d1d5db;
+  border: 2px solid #fff;
+  transition: background-color 0.15s ease;
+}
+
+.react-flow__handle:hover {
+  background-color: #6366f1;
+}
+
+.react-flow__handle-connecting {
+  background-color: #6366f1;
+}
+
+/* Edge styling */
+.react-flow__edge-path {
+  stroke: #d1d5db;
+  stroke-width: 2;
+}
+
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: #6366f1;
+}
+
+/* Node selection ring */
+.react-flow__node.selected > div {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
+/* Remove default node border added by React Flow */
+.react-flow__node-default,
+.react-flow__node-input,
+.react-flow__node-output {
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
