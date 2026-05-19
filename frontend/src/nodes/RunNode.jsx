@@ -45,7 +45,10 @@ export default function RunNode({ id, data }) {
   const [runError,   setRunError]  = useState('')
   const [modelsErr,  setModelsErr] = useState('')
 
-  const pollRef = useRef(null)
+  const pollRef      = useRef(null)
+  // Refs so the autoRun effect always sees the latest values without stale closures
+  const handleRunRef = useRef(null)
+  const canRunRef    = useRef(false)
 
   const updateData = useCallback((updates) => {
     setNodes(nds => nds.map(n =>
@@ -125,6 +128,17 @@ export default function RunNode({ id, data }) {
 
   const recipeName = derivedRecipe || data.recipeName || ''
   const canRun = recipeName && model && status !== 'pending' && status !== 'running'
+
+  // Keep refs current every render so the autoRun effect has no stale closures
+  canRunRef.current    = canRun
+  handleRunRef.current = handleRun
+
+  // Run All — parent sets data.autoRun = true to trigger this node
+  useEffect(() => {
+    if (!data.autoRun) return
+    updateData({ autoRun: false })
+    if (canRunRef.current) handleRunRef.current()
+  }, [data.autoRun, updateData]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="w-60 rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">

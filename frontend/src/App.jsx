@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactFlow, {
   Background,
   Controls,
@@ -15,7 +15,23 @@ import Sidebar from './components/Sidebar.jsx'
 import SettingsPanel from './components/SettingsPanel.jsx'
 
 // ---------------------------------------------------------------------------
-// Initial canvas state — a sample pipeline so the canvas isn't blank
+// Canvas persistence — load once at module init, save on change
+// ---------------------------------------------------------------------------
+
+const STORAGE_KEY = 'qlms_canvas_v1'
+
+function loadSavedCanvas() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch {}
+  return null
+}
+
+const _saved = loadSavedCanvas()
+
+// ---------------------------------------------------------------------------
+// Default canvas — shown when no saved state exists
 // ---------------------------------------------------------------------------
 
 const INITIAL_NODES = [
@@ -87,49 +103,106 @@ const nextId = (type) => `${type}-${nodeIdCounter++}`
 // ---------------------------------------------------------------------------
 
 export default function App() {
-  const [nodes, setNodes, onNodesChange] = useNodesState(INITIAL_NODES)
-  const [edges, setEdges, onEdgesChange] = useEdgesState(INITIAL_EDGES)
+  const [nodes, setNodes, onNodesChange] = useNodesState(_saved?.nodes ?? INITIAL_NODES)
+  const [edges, setEdges, onEdgesChange] = useEdgesState(_saved?.edges ?? INITIAL_EDGES)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [rfInstance, setRfInstance] = useState(null)
-  const wrapperRef = useRef(null)
+  const [rfInstance, setRfInstance]     = useState(null)
+  const wrapperRef  = useRef(null)
+  const saveTimer   = useRef(null)
+  const importRef   = useRef(null)
 
-  // Connect two nodes by dragging handle to handle
+  // ── Persist canvas to localStorage (debounced 800 ms) ──────────────────────
+  useEffect(() => {
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes, edges }))
+      } catch {}
+    }, 800)
+  }, [nodes, edges])
+
+  // ── Connect two nodes ──────────────────────────────────────────────────────
   const onConnect = useCallback(
     (params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep' }, eds)),
     [setEdges],
   )
 
-  // Allow dropping onto the canvas
+  // ── Drop from sidebar ──────────────────────────────────────────────────────
   const onDragOver = useCallback((e) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
   }, [])
 
-  // Create a new node at the drop position
   const onDrop = useCallback((e) => {
     e.preventDefault()
     const type = e.dataTransfer.getData('application/reactflow')
     if (!type || !rfInstance) return
 
-    const position = rfInstance.screenToFlowPosition({
-      x: e.clientX,
-      y: e.clientY,
-    })
-
-    const newNode = {
+    const position = rfInstance.screenToFlowPosition({ x: e.clientX, y: e.clientY })
+    setNodes((nds) => nds.concat({
       id: nextId(type),
       type,
       position,
       data: defaultData(type),
-    }
-    setNodes((nds) => nds.concat(newNode))
+    }))
   }, [rfInstance, setNodes])
+
+  // ── Export ─────────────────────────────────────────────────────────────────
+  const handleExport = useCallback(() => {
+    const payload = JSON.stringify({ nodes, edges }, null, 2)
+    const blob = new Blob([payload], { type: 'application/json' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `qlms-pipeline-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [nodes, edges])
+
+  // ── Import ─────────────────────────────────────────────────────────────────
+  const handleImportFile = useCallback((e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const { nodes: n, edges: eg } = JSON.parse(ev.target.result)
+        setNodes(n ?? [])
+        setEdges(eg ?? [])
+        if (rfInstance) setTimeout(() => rfInstance.fitView({ padding: 0.2 }), 50)
+      } catch {
+        alert('Invalid pipeline file.')
+      }
+    }
+    reader.readAsText(file)
+    e.target.value = ''   // reset so the same file can be re-imported
+  }, [rfInstance, setNodes, setEdges])
+
+  // ── Run All — sets autoRun flag on every idle RunNode ─────────────────────
+  const handleRunAll = useCallback(() => {
+    setNodes(nds => nds.map(n =>
+      n.type === 'run' ? { ...n, data: { ...n.data, autoRun: true } } : n
+    ))
+  }, [setNodes])
+
+  // ── New canvas ─────────────────────────────────────────────────────────────
+  const handleNew = useCallback(() => {
+    if (!window.confirm('Start a new canvas? Unsaved changes will be lost.')) return
+    localStorage.removeItem(STORAGE_KEY)
+    setNodes(INITIAL_NODES)
+    setEdges(INITIAL_EDGES)
+    if (rfInstance) setTimeout(() => rfInstance.fitView({ padding: 0.2 }), 50)
+  }, [rfInstance, setNodes, setEdges])
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-gray-50">
       <Header
         onSettingsToggle={() => setSettingsOpen(o => !o)}
         settingsOpen={settingsOpen}
+        onExport={handleExport}
+        onImport={() => importRef.current?.click()}
+        onRunAll={handleRunAll}
+        onNew={handleNew}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -177,6 +250,15 @@ export default function App() {
           <SettingsPanel onClose={() => setSettingsOpen(false)} />
         )}
       </div>
+
+      {/* Hidden import file input */}
+      <input
+        ref={importRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={handleImportFile}
+      />
     </div>
   )
 }
