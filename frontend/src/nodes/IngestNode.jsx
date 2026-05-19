@@ -2,37 +2,45 @@
  * IngestNode — "Load Data"
  *
  * Three stages:
- *   empty      → drop zone / click to browse
+ *   empty      → File / Paste tabs
  *   loaded     → column picker + segmenter selector + Apply button
- *   structured → preview stats (n_rows, avg_chars, columns) + replace link
+ *   structured → preview stats + replace link
+ *
+ * On mount, calls GET /api/ingest/preview to restore 'structured' state
+ * if the workspace already has docs.
  *
  * Calls:
+ *   GET  /api/ingest/preview    → restore structured stage on mount
  *   POST /api/ingest/files      → source summary + column list
+ *   POST /api/ingest/paste      → source summary (no columns for plain text)
  *   POST /api/ingest/structure  → structured docs preview
  */
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Handle, Position, useReactFlow } from 'reactflow'
-import { uploadFiles, structureSources } from '../lib/api.js'
+import { uploadFiles, structureSources, getPreview, pasteSources } from '../lib/api.js'
 
 const SEGMENTERS = [
-  { value: 'none',       label: 'No segmentation' },
-  { value: 'paragraph',  label: 'By paragraph' },
+  { value: 'none',        label: 'No segmentation' },
+  { value: 'paragraph',   label: 'By paragraph' },
   { value: 'char_length', label: 'Fixed length' },
 ]
 
 export default function IngestNode({ id, data }) {
   const { setNodes } = useReactFlow()
 
-  const [stage,    setStage]    = useState(data.stage    || 'empty')
-  const [columns,  setColumns]  = useState(data.columns  || [])
-  const [textCols, setTextCols] = useState(data.textCols || [])
-  const [idCol,    setIdCol]    = useState(data.idCol    || '')
+  const [stage,     setStage]    = useState(data.stage    || 'empty')
+  const [tab,       setTab]      = useState('file')       // 'file' | 'paste'
+  const [columns,   setColumns]  = useState(data.columns  || [])
+  const [textCols,  setTextCols] = useState(data.textCols || [])
+  const [idCol,     setIdCol]    = useState(data.idCol    || '')
   const [segmenter, setSegmenter] = useState('none')
   const [chunkSize, setChunkSize] = useState(1000)
-  const [preview,  setPreview]  = useState(data.preview  || null)
-  const [loading,  setLoading]  = useState(false)
-  const [error,    setError]    = useState('')
+  const [preview,   setPreview]  = useState(data.preview  || null)
+  const [pasteText, setPasteText] = useState('')
+  const [pasteMode, setPasteMode] = useState('single')    // 'single' | 'lines'
+  const [loading,   setLoading]  = useState(false)
+  const [error,     setError]    = useState('')
 
   const fileRef = useRef()
 
@@ -42,7 +50,21 @@ export default function IngestNode({ id, data }) {
     ))
   }, [id, setNodes])
 
-  // ---- Stage 1: upload files ----
+  // Restore structured stage on mount if workspace already has docs
+  useEffect(() => {
+    if (stage !== 'empty') return  // already restored from node data
+    getPreview()
+      .then(({ data: res }) => {
+        if (res.n_rows > 0) {
+          setPreview(res)
+          setStage('structured')
+          updateData({ stage: 'structured', preview: res, nRows: res.n_rows })
+        }
+      })
+      .catch(() => {})  // silent — backend may not be up yet
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- Stage 1a: upload files ----
   const handleFiles = async (files) => {
     if (!files.length) return
     setLoading(true)
@@ -51,16 +73,7 @@ export default function IngestNode({ id, data }) {
       const fd = new FormData()
       for (const f of files) fd.append('files', f)
       const { data: res } = await uploadFiles(fd)
-
-      // Collect all columns from tabular sources
-      const allCols = [...new Set(res.sources.flatMap(s => s.columns ?? []))]
-      setColumns(allCols)
-      // Pre-select first column as text column
-      const defaultText = allCols.length ? [allCols[0]] : []
-      setTextCols(defaultText)
-      setIdCol('')
-      setStage('loaded')
-      updateData({ stage: 'loaded', columns: allCols, textCols: defaultText })
+      _afterLoad(res)
     } catch (e) {
       setError(e.response?.data?.detail ?? e.message)
     } finally {
@@ -68,19 +81,45 @@ export default function IngestNode({ id, data }) {
     }
   }
 
+  // ---- Stage 1b: paste text ----
+  const handlePaste = async () => {
+    if (!pasteText.trim()) return
+    setLoading(true)
+    setError('')
+    try {
+      const { data: res } = await pasteSources({ text: pasteText, mode: pasteMode })
+      _afterLoad(res)
+    } catch (e) {
+      setError(e.response?.data?.detail ?? e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Common transition after any Stage 1 call
+  const _afterLoad = (res) => {
+    const allCols = [...new Set(res.sources.flatMap(s => s.columns ?? []))]
+    setColumns(allCols)
+    const defaultText = allCols.length ? [allCols[0]] : []
+    setTextCols(defaultText)
+    setIdCol('')
+    setStage('loaded')
+    updateData({ stage: 'loaded', columns: allCols, textCols: defaultText })
+  }
+
   // ---- Stage 2: apply structure + segmentation ----
   const handleApply = async () => {
-    if (!textCols.length) return
+    if (columns.length > 0 && !textCols.length) return
     setLoading(true)
     setError('')
     try {
       const params = segmenter === 'char_length' ? { chunk_size: chunkSize } : {}
       const { data: res } = await structureSources({
-        text_columns:      textCols,
-        id_column:         idCol || null,
-        metadata_columns:  [],
+        text_columns:     textCols,
+        id_column:        idCol || null,
+        metadata_columns: [],
         segmenter,
-        segmenter_params:  params,
+        segmenter_params: params,
       })
       setPreview(res)
       setStage('structured')
@@ -103,6 +142,7 @@ export default function IngestNode({ id, data }) {
     setTextCols([])
     setIdCol('')
     setPreview(null)
+    setPasteText('')
     setError('')
     updateData({ stage: 'empty', columns: [], textCols: [], preview: null, nRows: 0 })
   }
@@ -127,24 +167,80 @@ export default function IngestNode({ id, data }) {
       {/* ── Body ── */}
       <div className="px-3 py-3 space-y-2.5 nodrag">
 
-        {/* Stage: empty — drop zone */}
+        {/* Stage: empty — File / Paste tabs */}
         {stage === 'empty' && (
-          <div
-            className="border-2 border-dashed border-gray-200 rounded-lg px-3 py-4
-                       text-center cursor-pointer transition-colors
-                       hover:border-blue-300 hover:bg-blue-50"
-            onClick={() => fileRef.current?.click()}
-            onDragOver={e => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy' }}
-            onDrop={e => { e.preventDefault(); e.stopPropagation(); handleFiles([...e.dataTransfer.files]) }}
-          >
-            {loading
-              ? <p className="text-xs text-blue-500 font-medium">Uploading…</p>
-              : <>
-                  <p className="text-xs font-medium text-gray-500">Drop a file or click to browse</p>
-                  <p className="text-xs text-gray-400 mt-1">CSV · XLSX · PDF · DOCX · TXT · JSON</p>
-                </>
-            }
-          </div>
+          <>
+            {/* Tab switcher */}
+            <div className="flex rounded-md overflow-hidden border border-gray-200 text-xs">
+              {['file', 'paste'].map(t => (
+                <button
+                  key={t}
+                  onClick={() => setTab(t)}
+                  className={`flex-1 py-1 font-medium transition-colors ${
+                    tab === t
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-white text-gray-500 hover:bg-gray-50'
+                  }`}
+                >
+                  {t === 'file' ? 'File' : 'Paste'}
+                </button>
+              ))}
+            </div>
+
+            {/* File drop zone */}
+            {tab === 'file' && (
+              <div
+                className="border-2 border-dashed border-gray-200 rounded-lg px-3 py-4
+                           text-center cursor-pointer transition-colors
+                           hover:border-blue-300 hover:bg-blue-50"
+                onClick={() => fileRef.current?.click()}
+                onDragOver={e => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy' }}
+                onDrop={e => { e.preventDefault(); e.stopPropagation(); handleFiles([...e.dataTransfer.files]) }}
+              >
+                {loading
+                  ? <p className="text-xs text-blue-500 font-medium">Uploading…</p>
+                  : <>
+                      <p className="text-xs font-medium text-gray-500">Drop a file or click to browse</p>
+                      <p className="text-xs text-gray-400 mt-1">CSV · XLSX · PDF · DOCX · TXT · JSON</p>
+                    </>
+                }
+              </div>
+            )}
+
+            {/* Paste text area */}
+            {tab === 'paste' && (
+              <div className="space-y-2">
+                <textarea
+                  rows={5}
+                  value={pasteText}
+                  onChange={e => setPasteText(e.target.value)}
+                  placeholder="Paste text here…"
+                  className="w-full text-xs rounded-md border border-gray-300 px-2 py-1.5
+                             bg-white text-gray-700 focus:border-blue-400 outline-none
+                             resize-none nowheel"
+                />
+                <div className="flex gap-2 items-center">
+                  <select
+                    value={pasteMode}
+                    onChange={e => setPasteMode(e.target.value)}
+                    className="flex-1 text-xs rounded-md border border-gray-300 px-2 py-1
+                               bg-white text-gray-700 focus:border-blue-400 outline-none nowheel"
+                  >
+                    <option value="single">Single document</option>
+                    <option value="lines">One doc per line</option>
+                  </select>
+                  <button
+                    onClick={handlePaste}
+                    disabled={loading || !pasteText.trim()}
+                    className="rounded-md bg-blue-500 px-3 py-1 text-xs font-semibold
+                               text-white hover:bg-blue-600 disabled:opacity-40 transition-colors"
+                  >
+                    {loading ? '…' : 'Load'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {/* Stage: loaded — column picker */}
@@ -171,12 +267,12 @@ export default function IngestNode({ id, data }) {
                         {col}
                       </button>
                     ))
-                  : <p className="text-xs text-gray-400 italic">No tabular columns detected</p>
+                  : <p className="text-xs text-gray-400 italic">No tabular columns (plain text docs)</p>
                 }
               </div>
             </div>
 
-            {/* ID column */}
+            {/* ID column (tabular only) */}
             {columns.length > 0 && (
               <div>
                 <p className="text-xs font-medium text-gray-700 mb-1">
@@ -224,7 +320,7 @@ export default function IngestNode({ id, data }) {
 
             <button
               onClick={handleApply}
-              disabled={loading || (!textCols.length && columns.length > 0)}
+              disabled={loading || (columns.length > 0 && !textCols.length)}
               className="w-full rounded-md bg-blue-500 px-3 py-1.5 text-xs font-semibold
                          text-white hover:bg-blue-600 disabled:opacity-40 transition-colors"
             >

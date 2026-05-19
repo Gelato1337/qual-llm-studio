@@ -20,6 +20,7 @@ from typing import Any
 
 import pandas as pd
 
+from app.eval.session import EvalSession
 from app.ingest.pipeline import LoadedSource
 from app.paths import WORKSPACE_DIR, ensure_dirs
 from app.workspace import Workspace
@@ -64,6 +65,9 @@ class Job:
 
 
 active_jobs: dict[str, Job] = {}
+
+# Eval sessions keyed by "{pipeline}__{version}"
+eval_sessions: dict[str, EvalSession] = {}
 
 
 def new_job(**kwargs) -> Job:

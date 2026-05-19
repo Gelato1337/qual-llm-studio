@@ -13,7 +13,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import execute, ingest, ollama, recipes, workspace
+from .routers import eval, execute, ingest, ollama, recipes, workspace
 
 app = FastAPI(
     title="Qual LLM Studio API",
@@ -35,7 +35,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(ollama.router, prefix="/api/ollama", tags=["ollama"])
+app.include_router(eval.router,      prefix="/api/eval",      tags=["eval"])
+app.include_router(ollama.router,    prefix="/api/ollama",    tags=["ollama"])
 app.include_router(ingest.router, prefix="/api/ingest", tags=["ingest"])
 app.include_router(recipes.router, prefix="/api/recipes", tags=["recipes"])
 app.include_router(execute.router, prefix="/api/execute", tags=["execute"])
