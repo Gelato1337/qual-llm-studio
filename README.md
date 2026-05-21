@@ -6,7 +6,25 @@ Workshop tool for running LLM-powered analyses on qualitative data. No-code UI o
 
 **Colab:** open `notebook/QualLLMStudio_Colab.ipynb`, run all cells, click the proxied URL.
 
-**Local:**
+**Local (web app — React + FastAPI):**
+
+Terminal 1 — backend:
+```bash
+pip install -r requirements.txt -r backend/requirements.txt
+ollama serve   # separate terminal if not already running
+uvicorn backend.main:app --reload --port 8001
+```
+
+Terminal 2 — frontend:
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open http://localhost:5173 in your browser.
+
+**Local (legacy Gradio UI):**
 ```bash
 pip install -r requirements.txt
 ollama serve   # in another terminal

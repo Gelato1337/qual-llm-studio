@@ -51,24 +51,100 @@ During development, both servers run simultaneously in two terminal windows.
 ## Project Structure
 
 ```
-project-root/
-├── frontend/               # React app
+qual-llm-studio/
+│
+├── frontend/                        # React + Vite web app (port 5173)
 │   ├── src/
-│   │   ├── components/     # Reusable UI components (blocks, sidebar, canvas)
-│   │   ├── nodes/          # React Flow custom node definitions (one per block type)
-│   │   ├── App.jsx         # Root component, canvas lives here
-│   │   └── main.jsx        # Entry point
+│   │   ├── App.jsx                  # Root component — React Flow canvas lives here
+│   │   ├── main.jsx                 # Entry point
+│   │   ├── index.css                # Tailwind base import
+│   │   ├── components/
+│   │   │   ├── Header.jsx           # Top bar
+│   │   │   ├── Sidebar.jsx          # Block palette (drag to canvas)
+│   │   │   └── SettingsPanel.jsx    # Ollama host / model settings overlay
+│   │   ├── nodes/                   # One file per React Flow block type
+│   │   │   ├── IngestNode.jsx       # Data ingestion block
+│   │   │   ├── RecipeNode.jsx       # Recipe selection / prompt block
+│   │   │   ├── RunNode.jsx          # Recipe execution block
+│   │   │   ├── QuickEvalNode.jsx    # 5-sample alignment check block
+│   │   │   └── EvalNode.jsx         # Full eval / advanced block
+│   │   └── lib/
+│   │       ├── api.js               # Axios helpers — all fetch calls go through here
+│   │       └── nodeTypes.js         # Registry mapping type strings → node components
 │   ├── index.html
 │   ├── vite.config.js
+│   ├── tailwind.config.js
+│   ├── postcss.config.js
 │   └── package.json
 │
-├── backend/                # FastAPI app
-│   ├── main.py             # API entry point, route definitions
-│   ├── routers/            # Separate files per feature area (e.g. corpus.py, analysis.py)
-│   ├── services/           # Core logic (NLP, AI calls, file handling)
-│   └── requirements.txt
+├── backend/                         # FastAPI REST API (port 8000)
+│   ├── main.py                      # App factory, CORS, router registration
+│   ├── state.py                     # Shared in-process state (active runs, etc.)
+│   ├── requirements.txt             # Backend-only deps (install alongside requirements.txt)
+│   └── routers/                     # One file per feature area — thin, delegate to app/
+│       ├── ingest.py                # POST /api/ingest/*
+│       ├── recipes.py               # GET/POST /api/recipes/*
+│       ├── execute.py               # POST /api/execute  (runs a recipe on a dataset)
+│       ├── eval.py                  # POST /api/eval/*
+│       ├── ollama.py                # GET /api/ollama/* (proxy / status)
+│       └── workspace.py             # GET/POST /api/workspace
 │
-└── project-reference.md    # This file
+├── app/                             # Legacy Gradio UI + shared core logic
+│   ├── main.py                      # Gradio app entry point (python -m app.main)
+│   ├── inference.py                 # Ollama HTTP client
+│   ├── recipe.py                    # Recipe schema, render_as_text / parse_from_text
+│   ├── runner_custom.py             # Parallel prompt+schema runner
+│   ├── dispatcher.py                # Picks runner, applies post-processing
+│   ├── json_parse.py                # Multi-strategy JSON extraction
+│   ├── grounding.py                 # rapidfuzz quote verification
+│   ├── prompting.py                 # Placeholder substitution ({{col}} and legacy {col})
+│   ├── resources.py                 # Adaptive parallelism (SLURM / GPU / CPU detection)
+│   ├── workspace.py                 # Disk-backed UI state (runs/_workspace/)
+│   ├── paths.py                     # Filesystem layout constants
+│   ├── llm_state.py                 # Connection status helpers
+│   ├── errors.py                    # Error toasts + log file
+│   ├── runs.py                      # Run folder management
+│   ├── drive.py                     # Google Drive save (Colab only)
+│   ├── ui_data_tab.py               # Gradio Data tab
+│   ├── ui_chat_tab.py               # Gradio Chat/Recipes tab
+│   ├── ui_runs_tab.py               # Gradio Runs tab
+│   ├── ui_quick_eval_tab.py         # Gradio Quick Eval tab
+│   ├── ui_eval_tab.py               # Gradio Advanced/Eval tab
+│   ├── eval/                        # Eval package
+│   │   ├── judges.py                # Human + LLM judge logic
+│   │   ├── optimizer.py             # DSPy BootstrapFewShot optimizer
+│   │   ├── sampling.py              # Stratified / targeted sampling
+│   │   ├── session.py               # Eval session lifecycle
+│   │   └── storage.py               # Label persistence
+│   └── ingest/                      # Ingestion package
+│       ├── pipeline.py              # Load → structure → segment orchestration
+│       ├── sources.py               # File / HuggingFace / paste loaders
+│       ├── structure.py             # Column picker, multi-column join
+│       ├── json_loader.py           # JSON path picker (e.g. [*].data)
+│       ├── regex_helper.py          # Regex-from-examples helper
+│       └── segmenters/              # Pluggable segmentation strategies
+│           ├── base.py
+│           ├── none_seg.py
+│           ├── char_length.py
+│           ├── paragraph.py
+│           ├── regex_seg.py
+│           └── llm_natural.py
+│
+├── datasets/                        # Ingested CSVs saved from the Data tab
+├── results/                         # One CSV per recipe run
+├── recipes/
+│   └── custom/                      # All JSON recipes (8 starters + user-created)
+├── runs/
+│   └── _workspace/                  # Disk-backed UI state (state.json, docs.parquet, …)
+│
+├── notebook/
+│   └── QualLLMStudio_Colab.ipynb    # One-click Colab entry point
+├── scripts/
+│   └── lumi_example.sh              # Template Slurm script for LUMI HPC
+│
+├── requirements.txt                 # Core Python deps (app/ + Gradio)
+├── README.md
+└── project-reference.md             # This file
 ```
 
 ---
@@ -139,11 +215,10 @@ cd frontend
 npm run dev
 # App available at http://localhost:5173
 
-# Terminal 2: start the backend
-cd backend
-uvicorn main:app --reload
-# API available at http://localhost:8000
-# API docs (auto-generated) at http://localhost:8000/docs
+# Terminal 2: start the backend (run from repo root, not backend/)
+uvicorn backend.main:app --reload --port 8001
+# API available at http://localhost:8001
+# API docs (auto-generated) at http://localhost:8001/docs
 ```
 
 ### Iterating with AI assistance (Claude Code or similar)
