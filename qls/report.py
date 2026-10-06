@@ -47,8 +47,13 @@ def _concept_html(card: dict) -> str:
         + f"<blockquote>{e(q['text'])}<div class='muted small'>{e(q['segment'])}</div></blockquote>"
         for q in card["quotes"]
     )
+    memos = "".join(
+        "<p class=small><b>coding memo</b>" + (f" ({e(m['concept'])})" if m["concept"] != card["id"] else "") + ": "
+        + "; ".join(f"<i>{e(k.replace('_', ' '))}</i> {e(v)}" for k, v in m.items() if k not in ("concept", "label")) + "</p>"
+        for m in card["coding_memos"]
+    ) + "".join(f"<p class=small><b>memo {e(m['id'])}</b> [{e(m['kind'])}, {e(m['author'])}]: {e(m['text'])}</p>" for m in card["memos"])
     return (f"<details><summary><b>{e(card['id'])}</b> {e(card['label'])}{flags}</summary>"
-            f"<p>{e(card['description'])}</p><p>{meta}</p>{quotes}</details>")
+            f"<p>{e(card['description'])}</p><p>{meta}</p>{memos}{quotes}</details>")
 
 
 def run_report(project: Project, run_id: str, max_quotes: int = 5) -> str:
@@ -120,8 +125,9 @@ def run_report(project: Project, run_id: str, max_quotes: int = 5) -> str:
     if s["memos"]:
         out.append("<h2>Memos</h2>")
         for mm in s["memos"].values():
-            out.append(f"<details><summary>{e(mm['id'])} · {e(mm['author'])} · {e(mm['text'][:90])}</summary>"
-                       f"<p>{e(mm['text'])}</p><p class='muted small'>links: {e(', '.join(mm['links']))}</p></details>")
+            ev = f" · evidence: {', '.join(mm.get('evidence', []))}" if mm.get("evidence") else ""
+            out.append(f"<details><summary>{e(mm['id'])} · {e(mm.get('kind', 'analytic'))} · {e(mm['author'])} · {e(mm['text'][:90])}</summary>"
+                       f"<p>{e(mm['text'])}</p><p class='muted small'>links: {e(', '.join(mm['links']))}{e(ev)}</p></details>")
 
     # decisions
     decs = run.decisions()

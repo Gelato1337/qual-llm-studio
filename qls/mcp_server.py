@@ -15,8 +15,8 @@ from .ops import Ops
 from .project import Project, QlsError
 from .report import compare_report, run_report
 from .runs import fork
-from .views import (active, check, concept_card, membership, read_document as _read_document,
-                    search_corpus as _search, status, structure_text)
+from .views import (active, check, concept_card, context_pack, membership, memos_about,
+                    read_document as _read_document, search_corpus as _search, status, structure_text)
 
 INSTRUCTIONS = """\
 Qual LLM Studio: visible, replayable qualitative analysis (Gioia method as reference).
@@ -27,6 +27,9 @@ with an actor: use actor="agent:<your name>" for your own decisions and actor="h
 when recording what the researcher decided. Start with open_project, then list_runs.
 For an independent grouping, fork_run(blind=True) first so you cannot see other themes.
 Work from concept cards (list_concepts cards=True) and the transcripts, not labels alone.
+Before any merge, theme or dimension decision call get_context on the items involved, and
+pass the segment/quote IDs you relied on as `evidence`. Write memos (boundary, surprise,
+counter, alternative) whenever you know something a later decision will need.
 """
 
 _state: dict[str, Any] = {"project": None}
@@ -41,8 +44,9 @@ def _p() -> Project:
     return _state["project"]
 
 
-def _ops(run: str, actor: str) -> Ops:
-    return Ops(_p().run(run), actor=actor)
+def _ops(run: str, actor: str, evidence: list[str] | None = None) -> Ops:
+    ops = Ops(_p().run(run), actor=actor)
+    return ops.with_evidence(evidence) if evidence else ops
 
 
 def build_server():
@@ -102,9 +106,13 @@ def build_server():
         return out
 
     @mcp.tool()
-    def fork_run(source: str, new: str, blind: bool = True, note: str = "", actor: str = "agent:mcp") -> dict:
-        """Copy a run. blind=True keeps only the 1st-order concepts (for an independent grouping)."""
+    def fork_run(source: str, new: str, blind: bool = True, note: str = "", exclude_docs: list[str] | None = None,
+                 actor: str = "agent:mcp") -> dict:
+        """Copy a run. blind=True keeps only the 1st-order concepts (for an independent grouping).
+        exclude_docs drops all quotes from those transcripts (leave-one-informant-out robustness)."""
         r = fork(_p(), source, new, keep="concepts" if blind else "all", actor=actor, note=note)
+        if exclude_docs:
+            Ops(r, actor=actor).exclude_documents(exclude_docs, f"robustness: leave out {', '.join(exclude_docs)}")
         return status(_p(), r)
 
     @mcp.tool()
@@ -150,86 +158,110 @@ def build_server():
     # -- changes (all logged) -------------------------------------------------
 
     @mcp.tool()
-    def merge_concepts(run: str, concept_ids: list[str], label: str, description: str, reason: str, actor: str = "agent:mcp") -> str:
+    def merge_concepts(run: str, concept_ids: list[str], label: str, description: str, reason: str, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Merge concepts that make the same point. Quotes move to the new concept (lossless)."""
-        return _ops(run, actor).merge_concepts(concept_ids, label, description, reason)
+        return _ops(run, actor, evidence).merge_concepts(concept_ids, label, description, reason)
 
     @mcp.tool()
-    def split_concept(run: str, concept_id: str, parts: list[dict], reason: str, actor: str = "agent:mcp") -> list[str]:
+    def split_concept(run: str, concept_id: str, parts: list[dict], reason: str, actor: str = "agent:mcp", evidence: list[str] | None = None) -> list[str]:
         """Split a concept. parts = [{"label": ..., "description": ..., "quotes": ["q1", ...]}]; every quote must be placed."""
-        return _ops(run, actor).split_concept(concept_id, parts, reason)
+        return _ops(run, actor, evidence).split_concept(concept_id, parts, reason)
 
     @mcp.tool()
     def rename_concept(run: str, concept_id: str, reason: str, label: str | None = None,
-                       description: str | None = None, actor: str = "agent:mcp") -> str:
+                       description: str | None = None, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Change a concept's label and/or description."""
-        _ops(run, actor).rename_concept(concept_id, label, description, reason)
+        _ops(run, actor, evidence).rename_concept(concept_id, label, description, reason)
         return concept_id
 
     @mcp.tool()
-    def drop_concept(run: str, concept_id: str, reason: str, actor: str = "agent:mcp") -> str:
+    def drop_concept(run: str, concept_id: str, reason: str, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Remove a concept from the analysis (kept in the log; can be restored)."""
-        _ops(run, actor).drop_concept(concept_id, reason)
+        _ops(run, actor, evidence).drop_concept(concept_id, reason)
         return concept_id
 
     @mcp.tool()
-    def create_theme(run: str, label: str, definition: str, concept_ids: list[str], reason: str, actor: str = "agent:mcp") -> str:
+    def create_theme(run: str, label: str, definition: str, concept_ids: list[str], reason: str, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Create a 2nd-order theme from concepts (concepts move here from any other theme)."""
-        return _ops(run, actor).create_theme(label, definition, concept_ids, reason)
+        return _ops(run, actor, evidence).create_theme(label, definition, concept_ids, reason)
 
     @mcp.tool()
-    def assign_concepts(run: str, theme_id: str, concept_ids: list[str], reason: str, actor: str = "agent:mcp") -> str:
+    def assign_concepts(run: str, theme_id: str, concept_ids: list[str], reason: str, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Put concepts into a theme (moving them from any other theme)."""
-        _ops(run, actor).assign_concepts(theme_id, concept_ids, reason)
+        _ops(run, actor, evidence).assign_concepts(theme_id, concept_ids, reason)
         return theme_id
 
     @mcp.tool()
-    def unassign_concepts(run: str, concept_ids: list[str], reason: str, actor: str = "agent:mcp") -> str:
+    def unassign_concepts(run: str, concept_ids: list[str], reason: str, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Take concepts out of their themes."""
-        _ops(run, actor).unassign_concepts(concept_ids, reason)
+        _ops(run, actor, evidence).unassign_concepts(concept_ids, reason)
         return "ok"
 
     @mcp.tool()
     def rename_theme(run: str, theme_id: str, reason: str, label: str | None = None,
-                     definition: str | None = None, actor: str = "agent:mcp") -> str:
+                     definition: str | None = None, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Change a theme's label and/or definition."""
-        _ops(run, actor).rename_theme(theme_id, label, definition, reason)
+        _ops(run, actor, evidence).rename_theme(theme_id, label, definition, reason)
         return theme_id
 
     @mcp.tool()
-    def drop_theme(run: str, theme_id: str, reason: str, actor: str = "agent:mcp") -> str:
+    def drop_theme(run: str, theme_id: str, reason: str, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Dissolve a theme; its concepts become unassigned."""
-        _ops(run, actor).drop_theme(theme_id, reason)
+        _ops(run, actor, evidence).drop_theme(theme_id, reason)
         return theme_id
 
     @mcp.tool()
-    def create_dimension(run: str, label: str, definition: str, theme_ids: list[str], reason: str, actor: str = "agent:mcp") -> str:
+    def create_dimension(run: str, label: str, definition: str, theme_ids: list[str], reason: str, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Create an aggregate dimension from themes."""
-        return _ops(run, actor).create_dimension(label, definition, theme_ids, reason)
+        return _ops(run, actor, evidence).create_dimension(label, definition, theme_ids, reason)
 
     @mcp.tool()
-    def assign_themes(run: str, dimension_id: str, theme_ids: list[str], reason: str, actor: str = "agent:mcp") -> str:
+    def assign_themes(run: str, dimension_id: str, theme_ids: list[str], reason: str, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Put themes into an aggregate dimension."""
-        _ops(run, actor).assign_themes(dimension_id, theme_ids, reason)
+        _ops(run, actor, evidence).assign_themes(dimension_id, theme_ids, reason)
         return dimension_id
 
     @mcp.tool()
     def rename_dimension(run: str, dimension_id: str, reason: str, label: str | None = None,
-                         definition: str | None = None, actor: str = "agent:mcp") -> str:
+                         definition: str | None = None, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Change a dimension's label and/or definition."""
-        _ops(run, actor).rename_dimension(dimension_id, label, definition, reason)
+        _ops(run, actor, evidence).rename_dimension(dimension_id, label, definition, reason)
         return dimension_id
 
     @mcp.tool()
-    def drop_dimension(run: str, dimension_id: str, reason: str, actor: str = "agent:mcp") -> str:
+    def drop_dimension(run: str, dimension_id: str, reason: str, actor: str = "agent:mcp", evidence: list[str] | None = None) -> str:
         """Dissolve an aggregate dimension; its themes become unplaced."""
-        _ops(run, actor).drop_dimension(dimension_id, reason)
+        _ops(run, actor, evidence).drop_dimension(dimension_id, reason)
         return dimension_id
 
     @mcp.tool()
-    def add_memo(run: str, text: str, links: list[str] | None = None, actor: str = "agent:mcp") -> str:
-        """Write an analytic memo linked to concepts/themes/dimensions (e.g. a counter-argument or open question)."""
-        return _ops(run, actor).add_memo(text, links or [])
+    def add_memo(run: str, text: str, links: list[str] | None = None, kind: str = "analytic",
+                 evidence: list[str] | None = None, actor: str = "agent:mcp") -> str:
+        """Write down analytic context so later decisions can use it. kind: analytic | boundary | surprise |
+        counter | alternative | decision | summary. links: what it is about (concept/theme/dimension IDs);
+        evidence: segment or quote IDs that support it."""
+        return _ops(run, actor).add_memo(text, links or [], kind=kind, evidence=evidence)
+
+    @mcp.tool()
+    def get_memos(run: str, about: str | None = None, kind: str | None = None) -> list[dict]:
+        """Memos of a run, optionally only those about one item (concepts include their merge history) or of one kind."""
+        s = _p().run(run).state()
+        ms = memos_about(s, about) if about else list(s["memos"].values())
+        return [m for m in ms if not kind or m.get("kind") == kind]
+
+    @mcp.tool()
+    def get_context(run: str, refs: list[str], max_chars: int = 12000, quotes_per_concept: int = 3) -> str:
+        """Rebuild the context behind concepts, themes, dimensions, segments or turns before deciding about them:
+        definitions, coding memos (through merges), memos, and quotes inside the conversation they came from.
+        Use it before every merge, theme or dimension decision instead of relying on labels."""
+        return context_pack(_p(), _p().run(run).state(), refs, max_chars, quotes_per_concept)
+
+    @mcp.tool()
+    def run_metrics(runs: list[str]) -> list[dict]:
+        """Genericness (informant language, generic words), informant voices per theme and coverage, per run."""
+        from .metrics import run_metrics as _rm
+
+        return [_rm(_p(), r) for r in runs]
 
     # -- comparison & reports ------------------------------------------------
 

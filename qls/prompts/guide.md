@@ -12,6 +12,12 @@ Add `--json` to any read command for machine-readable output.
     qls search "vendor lock" [--doc P01] [--regex] [--all-turns]
                                                find text in informant segments (or all turns)
 
+## Rebuild context before deciding
+    qls context c12 c40 t3 [--max-chars 12000] [--quotes 3]
+                                               definitions, coding memos (through merges), memos, and quotes
+                                               inside the conversation they came from, for any IDs
+    qls memos [--about c12] [--kind counter]  memos about an item (concepts include their merge history)
+
 ## Inspect a run
     qls runs                                   list runs
     qls status                                 counts, unassigned concepts, flags
@@ -21,7 +27,7 @@ Add `--json` to any read command for machine-readable output.
     qls decisions [--last 20]                  the decision log
     qls check                                  integrity: nothing lost, no double assignment
 
-## Change the analysis (each needs --reason "one line")
+## Change the analysis (each needs --reason "one line"; add --evidence <segment/quote IDs> you relied on)
     qls concept merge c3 c9 c14 --label "..." --description "..." --reason "..."
     qls concept split c7 --part "label A|q12,q13" --part "label B|q14" --reason "..."
     qls concept rename c7 --label "..." [--description "..."] --reason "..."
@@ -35,10 +41,13 @@ Add `--json` to any read command for machine-readable output.
     qls dim assign a1 t5 --reason "..."
     qls dim rename a1 --label "..." --reason "..."
     qls dim drop a1 --reason "..."
-    qls memo "free text" [--link c12 --link t3]
+    qls memo "free text" [--link c12 --link t3] [--kind boundary|surprise|counter|alternative|decision|summary]
+              [--evidence P04:s012 q33]
 
 ## Runs, comparison, reports
-    qls fork SRC NEW [--blind]                 copy a run; --blind keeps only concepts (independent grouping)
+    qls fork SRC NEW [--blind] [--exclude-doc P04]
+                                               copy a run; --blind keeps only concepts (independent grouping);
+                                               --exclude-doc drops a transcript's quotes (leave-one-out)
     qls compare RUN_A RUN_B [--html out.html]  structural agreement (Rand, ARI, NMI) and differing groups
     qls consensus RUN1 RUN2 RUN3 ...           stability of groupings across runs
     qls report [--out file.html]               HTML report of a run
@@ -48,3 +57,8 @@ Add `--json` to any read command for machine-readable output.
     qls code [--run NAME] [--doc P01] [--passes 3]   stage 1: 1st-order concepts with verified quotes
     qls consolidate RUN [--into NEW] [--no-model]    stage 2: merge identical / same-meaning concepts
     qls analyst --from RUN [--replicates 5]          stages 3-4 by independent pi agents
+    qls group RUN [--view labels|cards|memos] [--no-verify]
+                                                     stages 3-4 by a fixed prompt; --view sets what the model sees,
+                                                     verify = return to data after each abstraction
+    qls oneshot [--run NAME]                         whole corpus in one call (long-context baseline)
+    qls metrics RUN [RUN ...]                        genericness, informant voices, coverage

@@ -22,7 +22,10 @@ from typing import Any, Iterable
 
 from .project import QlsError, Run, now
 
-STAGE = {"concept": 2, "theme": 3, "dimension": 4, "memo": None}
+STAGE = {"concept": 2, "theme": 3, "dimension": 4, "memo": None, "corpus": 0}
+
+# Memo kinds: what the note is for. Kept small so memos stay queryable.
+MEMO_KINDS = ("analytic", "boundary", "surprise", "counter", "alternative", "decision", "summary")
 
 
 class Ops:
@@ -36,6 +39,7 @@ class Ops:
         self._state: dict | None = None
         self._pending: list[dict] = []
         self._batch = 0
+        self._evidence: list[str] = []
 
     # -- state & commit -------------------------------------------------------
 
@@ -90,11 +94,41 @@ class Ops:
             "inputs": list(inputs),
             "outputs": list(outputs),
             "reason": (reason or "").strip(),
+            "evidence": self._evidence,
             "detail": detail,
             "ts": now(),
         }
+        self._evidence = []
         self._pending.append(rec)
         return rec
+
+    # -- evidence ---------------------------------------------------------------
+
+    def known(self, ref: str) -> bool:
+        """True if ref names something in this run or the corpus."""
+        s = self.s
+        if ref in s["concepts"] or ref in s["themes"] or ref in s["dimensions"] or ref in s["quotes"] or ref in s["memos"]:
+            return True
+        proj = self.run.project
+        doc_id = ref.split(":", 1)[0]
+        if doc_id not in proj.doc_ids():
+            return False
+        if ":" not in ref:
+            return True
+        d = proj.doc(doc_id)
+        return any(u["id"] == ref for u in d["segments"]) or any(u["id"] == ref for u in d["turns"])
+
+    def _check_refs(self, refs: list[str] | None, what: str) -> list[str]:
+        refs = list(dict.fromkeys(refs or []))
+        bad = [r for r in refs if not self.known(r)]
+        if bad:
+            raise QlsError(f"Unknown {what}: {', '.join(bad)} (use concept/theme/dimension/quote/memo IDs, documents, turns or segments)")
+        return refs
+
+    def with_evidence(self, refs: list[str] | None) -> "Ops":
+        """Attach evidence (segment, quote, memo... IDs) to the next decision record."""
+        self._evidence = self._check_refs(refs, "evidence")
+        return self
 
     @staticmethod
     def _need_reason(reason: str | None) -> str:
@@ -140,7 +174,8 @@ class Ops:
     # -- concepts (stage 1-2) -------------------------------------------------
 
     def add_concept(self, label: str, description: str, quotes: list[dict], reason: str = "",
-                    origin: dict | None = None, flags: list[str] | None = None, stage: int = 1) -> str:
+                    origin: dict | None = None, flags: list[str] | None = None, stage: int = 1,
+                    memo: dict | None = None) -> str:
         if not label.strip():
             raise QlsError("Concept label is empty")
         if not quotes:
@@ -156,6 +191,9 @@ class Ops:
             "quotes": qids, "status": "active", "merged_into": None,
             "origin": origin or {}, "flags": flags or [],
         }
+        memo = {k: v.strip() for k, v in (memo or {}).items() if isinstance(v, str) and v.strip()}
+        if memo:
+            self.s["concepts"][cid]["memo"] = memo
         self._log("create", "concept", [q["segment"] for q in quotes], [cid], reason or "coded from transcript",
                   stage=stage, label=label.strip())
         self._done()
@@ -392,11 +430,49 @@ class Ops:
 
     # -- memos ----------------------------------------------------------------
 
-    def add_memo(self, text: str, links: list[str] | None = None) -> str:
+    def add_memo(self, text: str, links: list[str] | None = None, kind: str = "analytic",
+                 evidence: list[str] | None = None) -> str:
+        """A memo is analytic context written down: what something means here, what it is
+        not, what was surprising, a counter-argument. Links say what it is about; evidence
+        says which data supports it."""
         if not text.strip():
             raise QlsError("Memo text is empty")
+        if kind not in MEMO_KINDS:
+            raise QlsError(f"Memo kind must be one of {', '.join(MEMO_KINDS)}")
+        links = self._check_refs(links, "link")
+        evidence = self._check_refs(evidence, "evidence")
         mid = self._next("m")
-        self.s["memos"][mid] = {"id": mid, "author": self.actor, "text": text.strip(), "links": links or [], "ts": now()}
-        self._log("memo", "memo", links or [], [mid], text.strip().splitlines()[0][:160])
+        self.s["memos"][mid] = {"id": mid, "author": self.actor, "kind": kind, "text": text.strip(),
+                                "links": links, "evidence": evidence, "ts": now()}
+        self._evidence = evidence
+        self._log("memo", "memo", links, [mid], text.strip().splitlines()[0][:160], kind=kind)
         self._done()
         return mid
+
+    # -- corpus subsets (robustness to data) ------------------------------------
+
+    def exclude_documents(self, docs: list[str], reason: str) -> dict:
+        """Remove every quote from these documents. Concepts left without quotes become
+        'excluded'. Used for leave-one-informant-out and bootstrap analyses."""
+        reason = self._need_reason(reason)
+        known = set(self.run.project.doc_ids())
+        bad = [d for d in docs if d not in known]
+        if bad:
+            raise QlsError(f"Unknown documents: {', '.join(bad)}")
+        gone = {qid for qid, q in self.s["quotes"].items() if q["doc"] in docs}
+        emptied = []
+        for c in self.s["concepts"].values():
+            if not set(c["quotes"]) & gone:
+                continue
+            c["quotes"] = [q for q in c["quotes"] if q not in gone]
+            if not c["quotes"] and c["status"] in ("active", "dropped"):
+                c["status"] = "excluded"
+                emptied.append(c["id"])
+                for t in self.s["themes"].values():
+                    if c["id"] in t["concepts"]:
+                        t["concepts"].remove(c["id"])
+        for qid in gone:
+            del self.s["quotes"][qid]
+        self._log("exclude", "corpus", docs, emptied, reason, quotes_removed=len(gone))
+        self._done()
+        return {"quotes_removed": len(gone), "concepts_excluded": emptied}

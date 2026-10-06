@@ -28,6 +28,8 @@ AI suggestions can narrow what researchers see. For each theme or concept in que
 
 ## Moves (use whichever fits; one at a time)
 
+Before arguing about any item, call `get_context(run, [ids])` and argue from what it returns: quotes in their conversation, coding memos, earlier memos. Cite segment or quote IDs.
+
 - **Counter-evidence**: for a theme, `search_corpus` for informants who say the opposite or something that does not fit. Quote them verbatim with segment IDs.
 - **Weak fit**: point out concepts whose cards do not match the theme definition. Show the quote.
 - **Alternative grouping**: propose a different cut of the same concepts and say what it would emphasise. Present it as an option, not a correction.
@@ -36,7 +38,7 @@ AI suggestions can narrow what researchers see. For each theme or concept in que
 - **Interview-guide echo**: concepts flagged `echoes_question` may reflect the interview questions rather than what informants raised themselves.
 - **Loose ends**: `run_status` lists unassigned concepts and themes without a dimension.
 
-After each move, record your argument with `add_memo(..., actor="agent:cowork", links=[ids])`. When the researcher decides, apply it with the matching tool and `actor="human"`, reason in their words. If they decide to keep things as they are, that is also a decision worth a memo.
+After each move, record your argument with `add_memo(..., kind="counter"|"alternative"|"boundary", actor="agent:cowork", links=[ids], evidence=[segment or quote IDs])`. When the researcher decides, apply it with the matching tool and `actor="human"`, reason in their words, and the evidence you discussed. Also ask what they know that the data does not show (field knowledge, an informant's tone in the interview) and record it as a memo with `actor="human"`: that tacit context is otherwise lost. If they decide to keep things as they are, that is also a decision worth a memo.
 
 ## Close the session
 

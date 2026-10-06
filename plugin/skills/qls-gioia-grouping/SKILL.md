@@ -18,11 +18,12 @@ Use the `qls` MCP tools. If they are unavailable, use the `qls` CLI with the sam
 ## Work
 
 - Read every concept card first: `list_concepts(run, cards=True, quotes=3)`. Cards show what informants said and which interviewer question each quote answered.
-- Work from meaning, not labels. When a card is ambiguous, read the data: `read_document(doc, start)` around the quote's turn, or `search_corpus(...)`. An earlier automated attempt (AMCIS 2025) failed because it grouped bare concept names and lost what informants meant, then filed themes under dimensions by name alone.
-- Write memos while you work (`add_memo`): alternatives you considered, tensions, concepts that fit nowhere.
+- Work from meaning, not labels. **Before every merge, theme or dimension decision, call `get_context(run, [ids])`**: it rebuilds definitions, coding memos (carried through merges), memos and the quotes inside their conversation. Go further with `read_document` or `search_corpus` when needed. Pass the segment/quote IDs you relied on as `evidence`. An earlier automated attempt (AMCIS 2025) failed because it grouped bare concept names and lost what informants meant, then filed themes under dimensions by name alone.
+- Write memos whenever you know something a later decision will need (`add_memo` with `kind`): `boundary` (what a concept is not), `surprise`, `counter` (data against a grouping), `alternative` (a grouping you considered), with `evidence`.
 - Fix a 1st-order concept only when clearly needed (duplicate, mixed points, off the research question), and give the reason.
 - **2nd-order themes** (`create_theme`): name what is going on across a set of concepts. Each needs a definition of one or two sentences. Themes may be more abstract than concepts, but must say something specific about this data. "Challenges" or "Technology" would fit any study and are not informative. Each concept goes in at most one theme.
-- **Aggregate dimensions** (`create_dimension`): before placing a theme, look at the concepts inside it, not just its name.
+- **Aggregate dimensions** (`create_dimension`): before placing a theme, `get_context(run, [theme_id])`, not just its name.
+- **Return to data**: when the structure stands, check each theme and dimension once more with `get_context`. Is the label as specific as what informants said? Revise with evidence where it is not.
 - Every change needs a one-line `reason`; write it for a reviewer reading the method section.
 
 ## Finish

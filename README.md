@@ -69,6 +69,36 @@ The repo is a plugin marketplace. The plugin adds the `qls` MCP server and three
 Claude Code: `/plugin marketplace add Gelato1337/qual-llm-studio`, then `/plugin install qls@qual-llm-studio`.
 Claude Cowork (desktop): Customize → Plugins → add the marketplace from the GitHub URL. The MCP server runs locally (`qls mcp`), so `qls` must be installed on the same machine.
 
+## Context: carried and rebuilt
+
+A human analyst's context is continuous; a pipeline's is lossy at every handoff. That is how the AMCIS pipeline "lost meaning". qls handles context in two ways:
+
+- **Carry it.** Stage 1 writes a short coding memo with every concept (`meaning_here`, `not_this`, `conditions`, `doubt`). Merges keep the memos of every concept they absorbed. Analysts and researchers add memos (`boundary`, `surprise`, `counter`, `alternative`, `decision`, `summary`) linked to concepts, themes or dimensions, with `--evidence` pointing at segments or quotes. Decisions can carry evidence too.
+- **Rebuild it at decision time.** `qls context <ids>` (MCP: `get_context`) returns definitions, memos and the quotes *inside the conversation they came from*, budgeted. Agents are told to call it before every merge, theme or dimension decision. The fixed grouping stage does it automatically after grouping (`verify`): each theme and dimension is checked against its data and relabelled or trimmed where the data disagrees.
+
+Memos are written by the same model (or person) that made the decision, so they are evidence of reasoning, not of the data. That is why rebuilding from quotes comes first and memos must cite segments.
+
+### The context experiment
+
+```bash
+qls code --run code-memo                      # concept_memos = true (default)
+# set concept_memos = false in qls.toml, then:
+qls code --run code-nomemo
+qls consolidate code-memo --into cons-memo
+qls group cons-memo --view labels --no-verify --into g-labels      # AMCIS-style: labels only
+qls group cons-memo --view cards  --no-verify --into g-cards
+qls group cons-memo --view memos  --no-verify --into g-memos       # carry
+qls group cons-memo --view memos              --into g-memos-v     # carry + rebuild
+qls oneshot --run one                                               # no handoffs at all
+qls metrics g-labels g-cards g-memos g-memos-v one                  # genericness, voices, coverage
+```
+
+Repeat each condition N times for stability (`qls consensus`). Genericness from `qls metrics` is a screen; informativeness needs human ratings.
+
+### Robustness to the data
+
+`qls fork cons-memo loo-P04 --blind --exclude-doc P04` drops one informant's quotes; group it again and compare with the full run. A theme that survives every model but disappears without P04 rests on one informant.
+
 ## What is recorded
 
 ```

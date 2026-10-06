@@ -52,6 +52,9 @@ passes = 1
 quote_threshold = 90
 # Retries with feedback when quotes cannot be found.
 max_retries = 2
+# Write a short coding memo with every concept (meaning here, what it is not,
+# conditions, doubts). Later stages read it. Set false for the no-memo condition.
+concept_memos = true
 
 [llm]
 # anthropic | openai | mock

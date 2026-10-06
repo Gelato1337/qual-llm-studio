@@ -202,9 +202,19 @@ class MockLLM(LLM):
 
     def json(self, system: str, user: str, schema: dict, name: str) -> LLMResult:
         if name == "first_order_concepts":
-            data = self._code(user)
+            data = self._code(user, with_memo="memo" in schema["properties"]["concepts"]["items"]["properties"])
         elif name == "concept_merges":
             data = self._consolidate(user)
+        elif name == "gioia_grouping":
+            data = self._group(user)
+        elif name in ("theme_check", "dimension_check"):
+            data = {"label_ok": True, "label": "", "definition": "", "misfits": [], "reason": "fits (mock)"}
+        elif name == "oneshot":
+            coded = self._code(user, with_memo="memo" in schema["properties"]["concepts"]["items"]["properties"])
+            for i, c in enumerate(coded["concepts"], 1):
+                c["key"] = f"k{i}"
+            data = {"concepts": coded["concepts"], **self._group_keys([(c["key"], c["label"]) for c in coded["concepts"]]),
+                    "notes": "mock one-shot"}
         else:
             raise LLMError(f"mock provider has no behaviour for {name!r}")
         return LLMResult(data, json.dumps(data), {"provider": "mock", "model_requested": "mock", "model_served": "mock"})
@@ -213,7 +223,20 @@ class MockLLM(LLM):
     def _words(s: str) -> list[str]:
         return [w for w in re.findall(r"[\wÅÄÖåäö]+", s.lower()) if w not in _STOP and len(w) > 2]
 
-    def _code(self, user: str) -> dict:
+    def _group_keys(self, items: list[tuple[str, str]]) -> dict:
+        groups: dict[str, list[str]] = {}
+        for cid, label in items:
+            groups.setdefault((self._words(label) or ["other"])[0], []).append(cid)
+        themes = [{"key": f"T{i}", "label": f"About {w}", "definition": f"Concepts starting with {w} (mock)",
+                   "concept_ids": ids, "reason": "same first word (mock)"} for i, (w, ids) in enumerate(sorted(groups.items()), 1)]
+        dims = [{"label": "Everything (mock)", "definition": "all themes", "theme_keys": [t["key"] for t in themes], "reason": "mock"}]
+        return {"themes": themes, "dimensions": dims}
+
+    def _group(self, user: str) -> dict:
+        items = re.findall(r'<concept id="([^"]+)" label="([^"]*)"', user) or re.findall(r"^- (c\d+): (.*)$", user, re.M)
+        return {**self._group_keys(items), "notes": "mock grouping"}
+
+    def _code(self, user: str, with_memo: bool = False) -> dict:
         concepts = []
         for seg_id, text in _SEG_TAG.findall(user):
             first = re.split(r"(?<=[.!?])\s+", text.strip())[0]
@@ -221,11 +244,14 @@ class MockLLM(LLM):
             words = self._words(first)[:4]
             if not words:
                 continue
-            concepts.append({
+            c = {
                 "label": " ".join(words),
                 "description": f"The informant says: {first[:120]}",
                 "quotes": [{"segment_id": seg_id, "quote": quote}],
-            })
+            }
+            if with_memo:
+                c["memo"] = {"meaning_here": f"mock meaning of {words[0]}", "not_this": "", "conditions": "", "doubt": ""}
+            concepts.append(c)
         return {"concepts": concepts}
 
     def _consolidate(self, user: str) -> dict:

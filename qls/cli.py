@@ -37,7 +37,10 @@ def _run_id(a, p: Project) -> str:
 def _ops(a, p: Project):
     from .ops import Ops
 
-    return Ops(p.run(_run_id(a, p)), actor=a.actor or os.environ.get("QLS_ACTOR") or "human")
+    ops = Ops(p.run(_run_id(a, p)), actor=a.actor or os.environ.get("QLS_ACTOR") or "human")
+    if getattr(a, "evidence", None):
+        ops.with_evidence(a.evidence)
+    return ops
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +140,15 @@ def cmd_fork(a):
     from .runs import fork
 
     p = _project(a)
-    r = fork(p, a.source, a.new, keep="concepts" if a.blind else "all", actor=a.actor or os.environ.get("QLS_ACTOR") or "human",
-             note=a.note or "")
+    actor = a.actor or os.environ.get("QLS_ACTOR") or "human"
+    r = fork(p, a.source, a.new, keep="concepts" if a.blind else "all", actor=actor, note=a.note or "")
     print(f"Created run {r.id} from {a.source}" + (" (concepts only)" if a.blind else ""))
+    if a.exclude_doc:
+        from .ops import Ops
+
+        res = Ops(r, actor=actor).exclude_documents(a.exclude_doc, f"robustness: leave out {', '.join(a.exclude_doc)}")
+        print(f"  left out {', '.join(a.exclude_doc)}: {res['quotes_removed']} quotes, "
+              f"{len(res['concepts_excluded'])} concepts had no other evidence")
 
 
 def cmd_status(a):
@@ -199,6 +208,8 @@ def cmd_concepts(a):
         print(f"{c['id']}: {c['label']}  [{len(c['informants'])} inf, {c['n_quotes']} q, theme {c['theme'] or '-'}]{flags}")
         if a.cards:
             print(f"    {c['description']}")
+            for m in c["coding_memos"]:
+                print("    memo: " + "; ".join(f"{k}: {v}" for k, v in m.items() if k not in ("concept", "label")))
             for q in c["quotes"]:
                 if q.get("question"):
                     print(f"    Q: {q['question'][:160]}")
@@ -217,6 +228,10 @@ def cmd_concept_show(a):
     print(f"{card['id']}: {card['label']}  ({card['status']}{', theme ' + card['theme'] if card['theme'] else ''})")
     print(f"{card['description']}\ninformants: {', '.join(card['informants'])}; quotes: {card['n_quotes']}; "
           f"flags: {', '.join(card['flags']) or '-'}; informant words: {card['informant_language']}")
+    for m in card["coding_memos"]:
+        print(f"coding memo ({m['concept']}): " + "; ".join(f"{k}: {v}" for k, v in m.items() if k not in ("concept", "label")))
+    for m in card["memos"]:
+        print(f"memo {m['id']} [{m['kind']}, {m['author']}]: {m['text']}")
     for q in card["quotes"]:
         print(f"\n{q['id']} {q['segment']}" + (f"\n  Q: {q['question']}" if q.get("question") else ""))
         print(f"  > {q['text']}")
@@ -299,8 +314,72 @@ def cmd_dim_drop(a):
 
 
 def cmd_memo(a):
-    mid = _ops(a, _project(a)).add_memo(a.text, a.link)
+    p = _project(a)
+    from .ops import Ops
+
+    ops = Ops(p.run(_run_id(a, p)), actor=a.actor or os.environ.get("QLS_ACTOR") or "human")
+    mid = ops.add_memo(a.text, a.link, kind=a.kind, evidence=a.evidence)
     print(f"memo {mid}")
+
+
+def cmd_memos(a):
+    from .views import memos_about
+
+    p = _project(a)
+    s = p.run(_run_id(a, p)).state()
+    ms = memos_about(s, a.about) if a.about else list(s["memos"].values())
+    if a.kind:
+        ms = [m for m in ms if m.get("kind") == a.kind]
+    if a.json:
+        return _print(ms, True)
+    for m in ms:
+        ev = f"  evidence: {', '.join(m.get('evidence', []))}" if m.get("evidence") else ""
+        print(f"{m['id']} [{m.get('kind', 'analytic')}] {m['author']} -> {', '.join(m['links']) or '-'}\n  {m['text']}{ev}\n")
+    print(f"({len(ms)} memos)")
+
+
+def cmd_context(a):
+    from .views import context_pack
+
+    p = _project(a)
+    print(context_pack(p, p.run(_run_id(a, p)).state(), a.refs, a.max_chars, a.quotes, a.neighbours))
+
+
+def cmd_group(a):
+    from .coding import llm_config
+    from .grouping import group
+    from .llm import make_llm
+
+    p = _project(a)
+    run = group(p, a.source, a.into, a.view, not a.no_verify, make_llm(llm_config(p, provider=a.provider, model=a.model)))
+    print(f"Grouping done: run {run.id}. See: qls structure --run {run.id}; qls metrics {run.id}")
+
+
+def cmd_oneshot(a):
+    from .coding import llm_config
+    from .grouping import oneshot
+    from .llm import make_llm
+
+    p = _project(a)
+    run = oneshot(p, a.name, make_llm(llm_config(p, provider=a.provider, model=a.model)))
+    print(f"One-shot done: run {run.id}. Compare with staged runs: qls compare {run.id} <run>")
+
+
+def cmd_metrics(a):
+    from .metrics import run_metrics
+
+    p = _project(a)
+    rows = [run_metrics(p, r) for r in a.runs]
+    if a.json:
+        return _print(rows, True)
+    cols = [("run", 24), ("view", 7), ("verify", 6), ("concepts", 8), ("themes", 6), ("coverage", 8),
+            ("concept_informant_language", 10), ("theme_informant_language", 10), ("theme_generic_share", 9),
+            ("theme_informants_mean", 9), ("theme_top_informant_share_mean", 9)]
+    short = {"concept_informant_language": "c_inf_lang", "theme_informant_language": "t_inf_lang",
+             "theme_generic_share": "t_generic", "theme_informants_mean": "t_voices", "theme_top_informant_share_mean": "t_top1"}
+    print(" ".join(short.get(c, c)[:w].ljust(w) for c, w in cols))
+    for r in rows:
+        print(" ".join(str(r.get(c) if r.get(c) is not None else "-")[:w].ljust(w) for c, w in cols))
 
 
 def cmd_decisions(a):
@@ -311,7 +390,8 @@ def cmd_decisions(a):
     for d in decs:
         lab = d.get("detail", {}).get("label") or d.get("detail", {}).get("new") or ""
         print(f"{d['id']:>6} s{d.get('stage') or '-'} {d['actor']:<22} {d['op']:<8} {d['target']:<9} "
-              f"{','.join(d['inputs'][:6])}{'…' if len(d['inputs']) > 6 else ''} -> {','.join(d['outputs'])} {lab} | {d['reason']}")
+              f"{','.join(d['inputs'][:6])}{'…' if len(d['inputs']) > 6 else ''} -> {','.join(d['outputs'])} {lab} | {d['reason']}"
+              + (f"  [evidence: {', '.join(d['evidence'])}]" if d.get("evidence") else ""))
 
 
 def cmd_compare(a):
@@ -427,6 +507,7 @@ def build_parser() -> argparse.ArgumentParser:
     actor.add_argument("--actor", help="who decides: human | agent:<name> (default: $QLS_ACTOR or human)")
     reason = argparse.ArgumentParser(add_help=False)
     reason.add_argument("--reason", required=True, help="one-line reason, logged")
+    reason.add_argument("--evidence", nargs="+", help="IDs of the data behind this decision (segments, quotes, memos...)")
     edit = [common, runarg, actor, reason]
 
     ap = argparse.ArgumentParser(prog="qls", description="Qual LLM Studio: visible, replayable qualitative analysis.")
@@ -484,6 +565,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("source")
     sp.add_argument("new")
     sp.add_argument("--blind", action="store_true", help="keep concepts only (independent grouping)")
+    sp.add_argument("--exclude-doc", action="append", help="drop all quotes from this document (leave-one-out)")
     sp.add_argument("--note")
 
     add("status", cmd_status, parents=(common, runarg), help="summary of a run")
@@ -565,7 +647,38 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("memo", cmd_memo, parents=(common, runarg, actor), help="write a memo")
     sp.add_argument("text")
-    sp.add_argument("--link", action="append", default=[])
+    sp.add_argument("--link", action="append", default=[], help="what the memo is about (repeat)")
+    sp.add_argument("--kind", default="analytic",
+                    choices=["analytic", "boundary", "surprise", "counter", "alternative", "decision", "summary"])
+    sp.add_argument("--evidence", nargs="+", help="segment/quote IDs that support the memo")
+
+    sp = add("memos", cmd_memos, parents=(common, runarg), help="list memos (about an item, of a kind)")
+    sp.add_argument("--about", help="concept/theme/dimension ID (concepts include their merge history)")
+    sp.add_argument("--kind")
+
+    sp = add("context", cmd_context, parents=(common, runarg),
+             help="context pack: definitions, memos and quotes in conversation behind IDs")
+    sp.add_argument("refs", nargs="+", help="concept, theme, dimension, segment or turn IDs")
+    sp.add_argument("--max-chars", type=int, default=12000)
+    sp.add_argument("--quotes", type=int, default=3, help="quotes per concept")
+    sp.add_argument("--neighbours", type=int, default=1, help="turns before/after each quote")
+
+    sp = add("group", cmd_group, help="stages 3-4 by a fixed prompt (experiment conditions)")
+    sp.add_argument("source", help="consolidated run to group")
+    sp.add_argument("--into", help="name of the new run")
+    sp.add_argument("--view", choices=["labels", "cards", "memos"], default="memos",
+                    help="what the model sees: labels only, cards with quotes, or cards with memos")
+    sp.add_argument("--no-verify", action="store_true", help="skip the return-to-data check after grouping")
+    sp.add_argument("--provider")
+    sp.add_argument("--model")
+
+    sp = add("oneshot", cmd_oneshot, help="whole corpus in one long-context call (baseline)")
+    sp.add_argument("--run", dest="name")
+    sp.add_argument("--provider")
+    sp.add_argument("--model")
+
+    sp = add("metrics", cmd_metrics, help="genericness, voices and coverage of runs")
+    sp.add_argument("runs", nargs="+")
 
     sp = add("decisions", cmd_decisions, parents=(common, runarg), help="show the decision log")
     sp.add_argument("--last", type=int)

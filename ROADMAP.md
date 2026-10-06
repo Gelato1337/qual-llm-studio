@@ -424,6 +424,44 @@ Labels differ across runs, so compare **structure, not names**.
 - **Process metrics (agentic runs):** share of corpus read, counter-evidence searches, revisions, memos written. Do runs that read more produce more informant-close and more stable structures?
 - **Validity:** blind expert ratings; distance to human analyses.
 
+### 7.3b Context, robustness, scale (October 2026 framing)
+
+**Context is the mechanism, robustness is the measurement, scale is the application.**
+
+*Context.* A human analyst's context is continuous; a pipeline's is lossy at every handoff, which is what
+"lost meaning" in the AMCIS paper was. Two remedies, both implemented:
+- carry it: coding memos per concept (carried through merges), typed analytic memos with evidence;
+- rebuild it: context packs (`qls context`, `get_context`) and a return-to-data check after each abstraction.
+
+Caveat built into the design: memos are the decider's own account. If later stages read memos *instead of*
+data, meaning is lost second-hand. So memos cite segments, and context packs put quotes-in-conversation first.
+
+Experiments:
+1. 2×2 carry × rebuild on stages 3-4 (`qls group --view labels|cards|memos`, `--no-verify`), plus memo/no-memo at stage 1.
+   Outcomes: informant-language and generic-word scores (`qls metrics`), human-rated informativeness, stability.
+2. Long-context one-shot (`qls oneshot`) vs staged runs. The gap bounds the cost of fragmentation; it is not
+   purely that, since long-context runs have their own failure modes (attention over 250k tokens).
+3. Agentic (pi, Cowork) vs fixed (`qls group`) with the same tools: does freedom to look things up help?
+
+*Robustness.* Separate the sources of variance:
+
+| Hold fixed | Vary | Robustness of |
+|---|---|---|
+| data, method | seed, model | the analyst: in the data or in the reader? |
+| model, method | informants (leave-one-out, bootstrap) | the sample: in the population or in these 17? |
+| data, model | prompts, view, order, framing | the method: a Gioia/pipeline artefact? |
+
+Analyse with generalizability theory (Cronbach): variance components per facet. Partitions are not scores, so
+the outcome per run is pairwise co-assignment of concepts (same theme or not), modelled with crossed facets.
+Two data-facet variants: cheap (keep stage-1 coding, drop an informant's quotes: `qls fork --exclude-doc`) and
+full (recode the subsample; compare on quoted spans). Fragility is reported as a map of where the data supports
+several readings, not as failure.
+
+*Scale.* Keep two claims apart: replicating human-scale studies (credibility) and exceeding them (how themes vary
+across subgroups and time). Scale needs a shared, evolving codebook and map-reduce coding, and a summarised
+decision log (100k decisions are not reviewable). Non-interview data (forums) is "inductive concept discovery with
+Gioia's structure", not Gioia: nobody probed those informants.
+
 ### 7.4 Research pain points (ranked)
 
 1. Where does variance enter? Expected: coding stable, abstraction (stages 3–4) unstable.
@@ -484,7 +522,11 @@ OpenAI-compatible SDK), which cover Claude, GPT, OpenRouter, vLLM and Ollama wit
 - [x] Structural operations (create, merge, split, rename, drop, restore, theme, dimension, memo), validated, lossless, logged.
 - [x] Stage 1 coding (passes, chunking, flags `echoes_question`, `short_quote`), stage 2 consolidation (identical labels, then model).
 - [x] Stages 3-4 by pi agents, Claude, or researcher + Claude.
-- [ ] Fixed-prompt (non-agentic) driver for stages 3-4, needed for condition F (agentic vs pipeline).
+- [x] Fixed-prompt driver for stages 3-4 (`qls group`) with view switch and return-to-data verification.
+- [x] Long-context one-shot baseline (`qls oneshot`).
+- [x] Context layer: coding memos, typed memos with evidence, evidence on decisions, context packs.
+- [x] Leave-one-informant-out forks (`--exclude-doc`); `qls metrics` (genericness, voices, coverage).
+- [ ] Generalizability-theory variance decomposition across runs.
 - [ ] Narrative generation (stage 5).
 
 ### Phase 4: Metrics and review (first version)

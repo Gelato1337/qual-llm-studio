@@ -52,6 +52,41 @@ CONCEPTS_SCHEMA = {
     "additionalProperties": False,
 }
 
+MEMO_FIELDS = {
+    "meaning_here": "What this point means for this informant, in their situation, in one or two sentences.",
+    "not_this": "What it is not: the nearby point it could be confused with and how it differs.",
+    "conditions": "When, for whom, or why it holds according to the informant; empty if they did not say.",
+    "doubt": "What is surprising, ambiguous or uncertain about it; empty if nothing.",
+}
+
+
+def concepts_schema(with_memo: bool) -> dict:
+    """The stage-1 output schema; with_memo adds the coding memo (the experiment switch)."""
+    if not with_memo:
+        return CONCEPTS_SCHEMA
+    import copy
+
+    sch = copy.deepcopy(CONCEPTS_SCHEMA)
+    item = sch["properties"]["concepts"]["items"]
+    item["properties"]["memo"] = {
+        "type": "object",
+        "properties": {k: {"type": "string", "description": v} for k, v in MEMO_FIELDS.items()},
+        "required": list(MEMO_FIELDS),
+        "additionalProperties": False,
+    }
+    item["required"].append("memo")
+    return sch
+
+
+MEMO_INSTRUCTIONS = """
+## Coding memo
+
+For every concept also write a short coding memo. Later stages will read it when they group
+concepts, so write down what a human coder would keep in their head: {fields}
+Stay with what the transcript shows; do not speculate about the informant's mood or motives.
+Leave a field empty rather than filling it with generic text.
+"""
+
 MERGES_SCHEMA = {
     "type": "object",
     "properties": {
@@ -142,7 +177,12 @@ def code_corpus(project: Project, run_id: str | None = None, docs: list[str] | N
     max_chars = int(project.cfg("coding", "max_chars_per_call", 150000))
     label_language = project.cfg("project", "label_language", "English")
 
+    with_memo = bool(project.cfg("coding", "concept_memos", True))
     system = load_prompt("first_order").replace("{label_language}", label_language)
+    if with_memo:
+        fields = " ".join(f"`{k}` ({v})" for k, v in MEMO_FIELDS.items())
+        system += MEMO_INSTRUCTIONS.replace("{fields}", fields)
+    schema = concepts_schema(with_memo)
     context = project.context_text()
     prompt_hash = sha256_text(system)
     doc_ids = docs or project.doc_ids()
@@ -150,7 +190,7 @@ def code_corpus(project: Project, run_id: str | None = None, docs: list[str] | N
         raise QlsError("No documents ingested. Run `qls ingest <files>` first.")
 
     run = project.new_run(run_id, "coding", stage=1, llm=llm.describe(), prompt_hash=prompt_hash,
-                          passes=passes, quote_threshold=threshold, docs=doc_ids, status="running")
+                          passes=passes, quote_threshold=threshold, docs=doc_ids, concept_memos=with_memo, status="running")
     model = llm.cfg.get("model")
     ops = Ops(run, actor="pipeline", model=model, prompt_hash=prompt_hash)
     calls, stats = [], {"concepts": 0, "quotes_ok": 0, "quotes_failed": 0, "exact": 0, "normalized": 0, "fuzzy": 0, "recovered_on_retry": 0}
@@ -163,7 +203,7 @@ def code_corpus(project: Project, run_id: str | None = None, docs: list[str] | N
                 user = f"{context}\n\n{_transcript_block(doc, segs)}\n\nReturn the 1st-order concepts for this transcript."
                 log(f"  coding {doc_id} pass {p}" + (f" part {ci}" if ci > 1 else "") + " ...")
                 try:
-                    res = llm.json(system, user, CONCEPTS_SCHEMA, "first_order_concepts")
+                    res = llm.json(system, user, schema, "first_order_concepts")
                 except LLMError as exc:
                     run.update_manifest(status="failed", error=f"{doc_id}: {exc}")
                     raise
@@ -188,7 +228,7 @@ def code_corpus(project: Project, run_id: str | None = None, docs: list[str] | N
                                 ops.add_concept(c["label"], c.get("description", ""), grounded,
                                                 reason="coded from transcript" + (f" (retry {attempt})" if attempt else ""),
                                                 origin={"doc": doc_id, "pass": p, "attempt": attempt},
-                                                flags=_flags(c["label"], used, grounded))
+                                                flags=_flags(c["label"], used, grounded), memo=c.get("memo"))
                                 stats["concepts"] += 1
                                 stats["quotes_ok"] += len(grounded)
                                 if attempt:
@@ -210,7 +250,7 @@ def code_corpus(project: Project, run_id: str | None = None, docs: list[str] | N
                         "Do not repeat concepts that already had a valid quote unless you are adding a corrected quote."
                     )
                     log(f"    {sum(len(c['quotes']) for c in bad)} quote(s) not found, retrying")
-                    res = llm.json(system, retry_user, CONCEPTS_SCHEMA, "first_order_concepts")
+                    res = llm.json(system, retry_user, schema, "first_order_concepts")
                     calls.append({"doc": doc_id, "pass": p, "part": ci, "retry": attempt + 1, **res.meta})
                     pending = res.data.get("concepts", [])
 
