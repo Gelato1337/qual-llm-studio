@@ -293,7 +293,7 @@ Status: **Use** = planned dependency · **Option** = behind an adapter, user's c
 | Whisper large-v3 / large-v3-turbo | Local ASR | Multilingual incl. Finnish | Use (via WhisperX) |
 | [NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) + Sortformer | Local | Fast; 25 European languages incl. Finnish; NeMo diarization | Evaluate |
 | DiariZen | Local | Strong open diarization research pipeline | Evaluate |
-| Docling ASR | Local | Docling can now ingest audio/video via ASR | Evaluate (convenience path; no diarization focus) |
+| Docling ASR | Local | Audio: Whisper only (openai-whisper, mlx-whisper on Apple Silicon, or whisper-s2t), timestamped segments, **no speaker diarization**. Video: ffmpeg extracts the audio track → Whisper; optional basic diarization (Resemblyzer embeddings + agglomerative clustering, 2–8 speakers); keyframes by fixed interval or scene change | Not our interview STT path (diarization too basic, audio-only has none). Use for video material and documents |
 | ffmpeg, Silero VAD | Local | Audio normalisation, voice activity | Use |
 
 ### 6.2 Document parsing

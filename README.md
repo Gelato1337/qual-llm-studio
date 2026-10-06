@@ -191,3 +191,7 @@ Three stages, each independently configurable per source:
 **v5:** filesystem reshape (datasets / results / recipes separated), recipes shown as text in the Chat tab (not JSON), Quick Eval simplified to 5-sample alignment check, advanced eval moved out of default surface.
 
 **v4 and earlier:** see git history.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
