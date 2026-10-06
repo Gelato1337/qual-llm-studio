@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "qls": {
+      "command": "qls",
+      "args": ["mcp"]
+    }
+  }
+}

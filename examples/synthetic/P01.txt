@@ -1,0 +1,17 @@
+Synthetic interview for testing. Not real data.
+
+I: Could you tell me briefly about your role?
+P01: I lead a team of twelve developers at a mid-sized consultancy. We mostly build web services for public sector clients.
+
+I: What changes have you seen in how software is delivered?
+P01: Clients now expect us to release every two weeks instead of once a year. Ten years ago a yearly big-bang release was normal, now a procurement document asks for continuous delivery pipelines.
+Honestly it changed how we price projects too, because we sell capacity rather than fixed scope.
+
+I: How about the cloud?
+P01: Almost every new project starts on one of the three big cloud platforms. The problem is that once you build on their managed services you are locked in, and moving away later costs more than the original build.
+
+I: What about AI tools?
+P01: Our juniors use code assistants every day. I see them shipping faster but they understand less of what they ship, so code review has become the real bottleneck for us.
+
+I: Anything else?
+P01: Legacy systems. Half of our work is keeping twenty-year-old systems alive because nobody dares to replace them.

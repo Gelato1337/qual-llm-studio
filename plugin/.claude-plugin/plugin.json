@@ -1,0 +1,6 @@
+{
+  "name": "qls",
+  "version": "0.1.0",
+  "description": "Qual LLM Studio tools and skills: Gioia-method grouping, AI-assisted discussion with the researcher, and run comparison, with every decision logged.",
+  "license": "Apache-2.0"
+}

@@ -1,0 +1,16 @@
+Synthetic interview for testing. Not real data.
+
+Interviewer: What does your company do?
+P02: We are a product company, about forty people, selling a logistics platform to retailers.
+
+Interviewer: How has software delivery changed for you?
+P02: We deploy several times a day now. Customers do not accept waiting for the next version; if a bug is reported in the morning they expect the fix the same afternoon.
+
+Interviewer: Do you use cloud services?
+P02: Everything runs on a single cloud vendor. It made us fast at the start, but our bill grows faster than our revenue and we are effectively locked in to their database services.
+
+Interviewer: How is AI affecting your work?
+P02: We use code assistants, but the bigger change is that customers ask for AI features in the product itself. Every sales meeting now includes the question what our AI roadmap is.
+
+Interviewer: What worries you?
+P02: Finding senior people. Juniors can produce a lot of code with assistants, but somebody has to understand the architecture, and those people are rare.

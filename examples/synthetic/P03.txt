@@ -1,0 +1,16 @@
+Synteettinen testihaastattelu. Ei oikeaa dataa.
+
+H: Kertoisitko lyhyesti taustastasi?
+P03: Olen ohjelmistoarkkitehti julkisen sektorin organisaatiossa, ja vastaan integraatioista.
+
+H: Miten ohjelmistojen toimittaminen on muuttunut?
+P03: Nykyään toimittajilta odotetaan jatkuvaa toimitusta, ei enää isoja vuosijulkaisuja. Hankinnoissa vaaditaan, että uusia versioita tulee parin viikon välein.
+
+H: Entä pilvipalvelut?
+P03: Pilveen siirrytään, mutta meillä on huoli siitä, että olemme liian riippuvaisia yhdestä toimittajasta. Jos hinnat nousevat, meillä ei ole oikeastaan vaihtoehtoja.
+
+H: Miten tekoäly näkyy työssänne?
+P03: Tekoälyavustajia käytetään koodauksessa, mutta tietosuojan takia emme saa syöttää niihin asiakasdataa, joten käyttö on rajattua.
+
+H: Mitä muuta haluaisit sanoa?
+P03: Vanhat järjestelmät ovat iso ongelma. Osa järjestelmistä on yli kaksikymmentä vuotta vanhoja, eikä kukaan uskalla korvata niitä.

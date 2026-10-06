@@ -1,6 +1,6 @@
 # Qual LLM Studio: Roadmap
 
-Status: planning document, October 2026. Living file; update as decisions land.
+Status: living document, October 2026. Phases 0-4 have a first implementation (see §8); the README describes how to use it.
 
 ---
 
@@ -454,44 +454,48 @@ Labels differ across runs, so compare **structure, not names**.
 
 ## 8. Phased plan
 
-### Phase 0: Housekeeping
-- [ ] Move current code to `legacy/` unchanged, with a short README on what it was.
-- [ ] `pyproject.toml` with uv; ruff, pytest, GitHub Actions CI.
-- [ ] Package skeleton `qls/` (core, services, ops, playbooks, interfaces).
-- [ ] Synthetic interview fixture set (5–6 short fake interviews, Finnish + English) for tests and demos.
+Scope decision (October 2026): keep it light. **Docling and pi first**; GABRIEL, STT services, tables and
+QDA exchange stay external for now. LiteLLM was dropped in favour of two thin providers (Anthropic SDK,
+OpenAI-compatible SDK), which cover Claude, GPT, OpenRouter, vLLM and Ollama with fewer dependencies.
 
-### Phase 1: Core and ingestion
-- [ ] Data model (Pydantic) and IDs; project layout; `qls init`.
-- [ ] Content-addressed artifact store; run manifests; decision log (`decisions.jsonl` + SQLite index).
-- [ ] Ingestion: Docling adapter, plain/SRT/VTT readers, transcript parser (turns, roles, question linkage).
-- [ ] STT adapters: AssemblyAI (API default), WhisperX + pyannote community-1 (local default); common diarized-transcript format.
-- [ ] Segmenters ported from legacy.
-- [ ] Grounding returning `(segment_id, start, end)` offsets.
-- [ ] Tables: DuckDB-backed `list / describe / query / create`, `datapackage.json`, text-column ingestion.
-- [ ] LLM provider layer (LiteLLM), config in `qls.toml` + env vars; consent-aware routing.
-- [ ] `qls map` (port of the legacy recipe runner).
+### Phase 0: Housekeeping ✅
+- [x] Move current code to `legacy/` unchanged.
+- [x] `pyproject.toml`, pytest suite (mock model, fake pi model server used during development).
+- [x] Package `qls/`.
+- [x] Synthetic interviews (English + Finnish) in `examples/synthetic/`.
+- [ ] CI (GitHub Actions), ruff.
 
-### Phase 2: Agent layer
-- [ ] `SKILL.md` / `AGENTS.md` for the CLI.
-- [ ] MCP server.
-- [ ] Sandbox recipe (container + manifest hashing); `qls run --harness pi --replicates N`.
-- [ ] pi package (skills, prompt templates, extension).
-- [ ] Claude Code / Cowork plugin.
+### Phase 1: Core and ingestion (mostly done)
+- [x] Project layout, `qls init`, context files hashed into every run.
+- [x] Run manifests, `state.json`, decision log (`decisions.jsonl`); forks for frozen-upstream reruns.
+- [x] Ingestion: Docling adapter (incl. Whisper audio), txt/md/SRT/VTT readers, transcript parser (turns, roles, question linkage, preamble kept but not coded).
+- [x] Grounding returning `(segment, start, end)` spans; retry with feedback.
+- [x] LLM providers: Anthropic (structured output, refusal fallback logged), OpenAI-compatible, mock.
+- [ ] STT adapters with diarization (WhisperX, AssemblyAI). Until then: bring transcripts with speaker labels.
+- [ ] Tables (DuckDB), `qls map` (legacy recipe runner port), consent-aware routing.
 
-### Phase 3: Gioia playbook
-- [ ] Structural operations: `code`, `merge`, `split`, `rename`, `drop`, `theme`, `dimension`, `memo`, all validated and logged.
-- [ ] Gioia skill (agentic mode) and fixed-stage driver (pipeline mode) on the same operations.
-- [ ] Stage freezing and isolated reruns (`qls rerun --stage 3 --from <artifact>`).
-- [ ] Data structure + narrative generation.
+### Phase 2: Agent layer (done, untested with real keys)
+- [x] `qls guide` (agent reference), MCP server (`qls mcp`).
+- [x] `qls analyst`: blind fork per replicate, own workspace, `qls` wrapper bound to the run and actor, pi with read+bash only, isolated pi config with `pi/models.json`, event stream + process metrics.
+- [x] Claude Code / Cowork plugin: MCP server + skills `qls-pipeline`, `qls-gioia-grouping`, `qls-dialogue`.
+- [ ] Container sandbox for analyst runs.
 
-### Phase 4: Metrics and review
-- [ ] Run comparison per level (CluSim element-centric, ARI/NMI, granularity).
-- [ ] Consensus matrix and stability badges.
-- [ ] Informant-language score; process metrics from session logs.
-- [ ] HTML reports: run diff, concept cards, informant cards, concept × informant matrix, Gioia figure, decision log.
+### Phase 3: Gioia playbook (done for stages 1-4)
+- [x] Structural operations (create, merge, split, rename, drop, restore, theme, dimension, memo), validated, lossless, logged.
+- [x] Stage 1 coding (passes, chunking, flags `echoes_question`, `short_quote`), stage 2 consolidation (identical labels, then model).
+- [x] Stages 3-4 by pi agents, Claude, or researcher + Claude.
+- [ ] Fixed-prompt (non-agentic) driver for stages 3-4, needed for condition F (agentic vs pipeline).
+- [ ] Narrative generation (stage 5).
+
+### Phase 4: Metrics and review (first version)
+- [x] Rand, ARI, NMI per level; comparison by shared concepts (forks) or quoted spans (independent codings).
+- [x] Consensus: pairwise agreement, per-concept stability, always-together pairs.
+- [x] Informant-language score per concept; process metrics from pi events.
+- [x] HTML reports: data structure, concept cards with question context, concept × informant matrix, memos, decision log; compare report showing only differences.
+- [ ] Element-centric similarity (CluSim) for overlapping/hierarchical comparison; stability badges in reports.
 
 ### Phase 5: Study runs
-- [ ] Smoke test: N=5 end to end, one model, on the 17-interview dataset (or synthetic data until access/ethics are settled).
+- [ ] Smoke test: N=5 end to end, one model, on the 17-interview dataset (`examples/amcis2025/context/` is the starting context; needs the original RQ wording).
 - [ ] vLLM job script for LUMI/CSC; determinism check.
 - [ ] Conditions A–F; analysis; paper 1.
 

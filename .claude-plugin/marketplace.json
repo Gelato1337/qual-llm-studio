@@ -1,0 +1,11 @@
+{
+  "name": "qual-llm-studio",
+  "owner": {"name": "Qual LLM Studio contributors"},
+  "plugins": [
+    {
+      "name": "qls",
+      "source": "./plugin",
+      "description": "Visible, replayable LLM-assisted qualitative analysis (Gioia method): independent grouping and a critical discussion partner, with every decision logged."
+    }
+  ]
+}

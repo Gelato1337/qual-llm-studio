@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qual-llm-studio"
+version = "0.1.0"
+description = "Tools for reproducible, visible LLM-assisted qualitative analysis, with the Gioia method as the reference playbook."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "rapidfuzz>=3.0",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=1.11"]
+openai = ["openai>=1.50"]
+docling = ["docling>=2.100"]
+mcp = ["mcp>=1.10"]
+all = ["anthropic>=1.11", "openai>=1.50", "docling>=2.100", "mcp>=1.10"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+qls = "qls.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["qls"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
