@@ -106,12 +106,28 @@ _LABEL_ONLY = re.compile(
 _NOISE = re.compile(r"^\s*<!--.*?-->\s*$")
 
 
+_PAGE = re.compile(r"\bpage\s+\d+(\s+of\s+\d+)?\b|©|\(c\)\s*\d{4}", re.I)
+
+
+def _boilerplate(lines: list[str]) -> set[str]:
+    """Running page headers and footers: short lines that repeat on many pages (digits ignored),
+    carrying a page number or a copyright mark. They are dropped, so quotes can span page breaks."""
+    from collections import Counter
+
+    key = lambda ln: re.sub(r"\d+", "#", " ".join(ln.split()))
+    counts = Counter(key(ln) for ln in lines if ln.strip() and len(ln) < 160)
+    return {k for k, n in counts.items() if n >= 3 and _PAGE.search(k)}
+
+
 def _clean_lines(text: str) -> list[tuple[str, bool]]:
     """(line, was_heading). Markdown heading marks are removed: document converters
-    sometimes render speaker labels or section titles as headings."""
+    sometimes render speaker labels or section titles as headings. Page headers and
+    footers repeated through the document are dropped."""
     out = []
-    for ln in text.splitlines():
-        if _NOISE.match(ln):
+    raw = text.splitlines()
+    junk = _boilerplate(raw)
+    for ln in raw:
+        if _NOISE.match(ln) or (junk and re.sub(r"\d+", "#", " ".join(ln.split())) in junk):
             continue
         ln = _TIMESTAMP_PREFIX.sub("", ln).rstrip()
         m = _HEADING.match(ln)

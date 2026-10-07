@@ -4,23 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qual-llm-studio"
-version = "0.1.0"
-description = "Executable qualitative methods: recipes, a strict evidence store, and free agents behind an MCP server."
+version = "0.3.0"
+description = "A memory server for qualitative analysis: a TypeDB ontology the agent cannot break, behind an MCP server."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
     "rapidfuzz>=3.0",
     "pyyaml>=6.0",
+    "typedb-driver>=3.12",
+    "mcp>=1.10",
 ]
 
 [project.optional-dependencies]
-anthropic = ["anthropic>=1.11"]
-openai = ["openai>=1.50"]
 docling = ["docling>=2.100"]
-mcp = ["mcp>=1.10"]
-typedb = ["typedb-driver>=3.12"]
-all = ["anthropic>=1.11", "openai>=1.50", "docling>=2.100", "mcp>=1.10"]
 dev = ["pytest>=8"]
 
 [project.scripts]

@@ -109,3 +109,30 @@ def test_page_break_inside_sentence_is_not_a_segment_boundary():
     turn = next(t for t in doc["turns"] if t["text"].startswith("First part"))
     assert all(s["text"] in turn["text"] for s in doc["segments"][1:])  # segments are exact slices
     assert [s["question_gap"] for s in doc["segments"]] == [0] + list(range(len(doc["segments"]) - 1))
+
+
+def test_page_footers_are_dropped():
+    page = "CHM Ref:X.2004      © 2004 Computer History Museum      Page {} of 9"
+    text = "\n".join([
+        "Haigh: Why spreadsheets?",
+        "Fylstra: Because accountants",
+        page.format(3),
+        "already worked in rows and columns.",
+        "Haigh: And then?", "Fylstra: We sold it.", page.format(4),
+        "Haigh: Where?", "Fylstra: Everywhere.", page.format(5),
+    ])
+    doc = build_document("F", text, ["Haigh"], 2000)
+    assert doc["speakers"] == {"Haigh": "interviewer", "Fylstra": "informant"}
+    assert doc["segments"][0]["text"] == "Because accountants\nalready worked in rows and columns."
+
+
+def test_package_data():
+    from qls.method import builtin_methods, core_schema, load_method
+
+    assert "gioia" in builtin_methods()
+    assert "entity intent" in core_schema()
+    m = load_method("gioia")
+    assert m.levels() == ["concept", "theme", "dimension"] and "Gioia" in m.guide
+    from importlib import resources
+
+    assert "Quotes" in resources.files("qls.agents").joinpath("AGENTS.md").read_text(encoding="utf-8")

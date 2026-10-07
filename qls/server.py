@@ -1,36 +1,39 @@
-"""MCP server: the agent tools of tools.py over stdio, for any harness (pi, Claude Code, Cowork).
+"""MCP server: the session's tools over stdio, for any MCP client (Claude Code, Cowork, others).
 
-The server is bound to one project, one run and one actor when it starts:
+Bound to one project, one run and one scholar when it starts:
 
-    qls mcp --run r1 --actor agent:coder-01        # an analyst
-    qls mcp --run r1 --actor reviewer:anna --readonly   # a reviewer: read tools only
+    qls mcp --run r1 --actor agent:scholar-1            # an analyst
+    qls mcp --run r1 --actor reviewer:anna              # read-only
 
-An agent therefore cannot choose its run mid-way or write as a human; researcher
-actions (approve, reject, edit, resume) exist only in the CLI.
+Method tools (add_concept, add_theme, ...) are generated from the method's actions.yaml.
+Researcher actions (approve, reject, answer, resume) stay in the CLI, so an agent can never
+approve its own work.
 """
 
 from __future__ import annotations
 
 import inspect
 import os
-from importlib import resources
+import threading
+from typing import Any
 
-from .tools import AGENT_TOOLS, Session, is_human
+from .session import HUMAN_TOOLS, Session, is_human
 from .util import QlsError
 
-READ_TOOLS = ["recipe_info", "list_sources", "read_source", "search", "get", "neighbors", "get_codebook", "get_terms",
-              "status", "check", "get_memo", "get_feedback", "read_board"]
+_LOCK = threading.Lock()  # tools run in worker threads; one call at a time per server
 
 INSTRUCTIONS = """\
-Tools for qualitative analysis on a strict evidence store. Start with recipe_info() (the method),
-ways_of_working() (how to quote, cite and memo), and list_sources(). Every write is validated:
-when a tool refuses, it says why and how to fix it. Quotes must be verified with add_quote();
-every link that needs a reason must have one; memos must be about something. When the recipe
-asks for a checkpoint, call checkpoint() and stop until the researcher resumes the run.
+A qualitative-analysis memory server. The analysis lives in a graph whose ontology refuses what breaks
+the method's form; you do the interpretation. Start with intent() (the research question: findings
+should answer it), method_guide() (how to do the method), ways_of_working() and list_sources().
+Work one interview at a time with begin(source). Quotes are checked against the transcript in the same
+call that adds a concept: copy the informant's exact words while the interview is in front of you.
+Use memos and the codebook as your long-term memory; look things up instead of relying on recall.
+When the method asks for a checkpoint, call checkpoint() and stop until the researcher resumes the run.
 """
 
 
-def build_server(session: Session, readonly: bool = False):
+def build_server(session: Session):
     try:
         from mcp.server.mcpserver import MCPServer as Server  # mcp >= 2
     except ImportError:
@@ -40,27 +43,25 @@ def build_server(session: Session, readonly: bool = False):
             raise QlsError("pip install 'qual-llm-studio[mcp]' to run the MCP server") from exc
 
     mcp = Server("qls", instructions=INSTRUCTIONS)
-    names = READ_TOOLS if readonly else AGENT_TOOLS
-
-    for name in names:
-        fn = getattr(session, name)
-        wrapped = _wrap(fn, name)
-        mcp.tool(name=name, description=(inspect.getdoc(fn) or name))(wrapped)
-
-    @mcp.tool(name="ways_of_working", description="How to quote, cite, label and write memos (AGENTS.md).")
-    def ways_of_working() -> str:
-        return resources.files("qls.agents").joinpath("AGENTS.md").read_text(encoding="utf-8")
-
+    for name in session.tools():
+        if name in HUMAN_TOOLS:
+            continue
+        if name in session.m.actions:
+            fn = method_tool(session, name)
+        else:
+            fn = _wrap(getattr(session, name), name)
+        mcp.tool(name=name, description=fn.__doc__ or name)(fn)
     return mcp
 
 
 def _wrap(fn, name):
-    """Expose the bound method with its signature; turn errors into refusals the model can read."""
+    """Expose a bound method with its signature; turn errors into refusals the model can read."""
     sig = inspect.signature(fn)
 
     def tool(**kwargs):
         try:
-            return fn(**kwargs)
+            with _LOCK:
+                return fn(**kwargs)
         except QlsError as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -73,14 +74,56 @@ def _wrap(fn, name):
     return tool
 
 
-def main(project: str | None, run: str | None, actor: str | None, model: str | None = None, readonly: bool = False) -> None:
+def method_tool(session: Session, name: str):
+    """A tool function for a method action, with parameters taken from actions.yaml."""
+    a = session.m.actions[name]
+    params, ann = [], {}
+
+    def add(pname, typ, default=inspect.Parameter.empty):
+        params.append(inspect.Parameter(pname, inspect.Parameter.KEYWORD_ONLY, default=default, annotation=typ))
+        ann[pname] = typ
+
+    fields = session.m.fields.get(a.type, [])
+    for f in fields:
+        if f.required:
+            add(f.param, str)
+    if a.kind == "create_code":
+        add("quotes", list[dict[str, Any]])
+    else:
+        add(a.members_param, list[dict[str, Any]])
+        if a.answers == "required":
+            add("answers", str)
+    for f in fields:
+        if not f.required:
+            add(f.param, str | None, None)
+    if a.kind == "create_code":
+        add("source", str | None, None)
+    if a.kind == "create_group" and a.answers == "optional":
+        add("answers", str | None, None)
+
+    def tool(**kwargs):
+        try:
+            with _LOCK:
+                return session.act(name, **{k: v for k, v in kwargs.items() if v is not None})
+        except QlsError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    lines = [a.doc, "", "Parameters:"] + [f"- {f.param}: {f.doc}" for f in fields if f.doc]
+    tool.__name__ = name
+    tool.__doc__ = "\n".join(lines)
+    tool.__signature__ = inspect.Signature(params, return_annotation=dict)
+    tool.__annotations__ = {**ann, "return": dict}
+    return tool
+
+
+def main(project: str | None, run: str | None, actor: str | None, model: str | None = None) -> None:
     from .project import Project
 
     run = run or os.environ.get("QLS_RUN")
+    actor = actor or os.environ.get("QLS_ACTOR")
     if not run or not actor:
         raise QlsError("qls mcp needs --run (or $QLS_RUN) and --actor (or $QLS_ACTOR)")
     if is_human(actor):
         raise QlsError("Researcher actions go through the CLI (qls respond / resume), not an MCP server.")
-    readonly = readonly or actor.startswith("reviewer")
-    session = Session(Project.find(project).store, run, actor, model or os.environ.get("QLS_MODEL"))
-    build_server(session, readonly).run()
+    session = Session(Project.find(project), run, actor, model or os.environ.get("QLS_MODEL"))
+    build_server(session).run()

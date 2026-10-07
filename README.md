@@ -1,105 +1,106 @@
-> **Branch `claude/typedb-mcp`: separate design branch, work in progress.**
-> The design is in [docs/pipeline.md](docs/pipeline.md) and the TypeDB ontology in [schema/](schema/).
-> The MCP server on TypeDB is not written yet. The code below this note is the
-> `claude/executable-protocol` implementation (SQLite store) that this branch starts from.
-> See [BRANCHES.md](BRANCHES.md) for which branch to use for what.
+> **Branch `claude/typedb-mcp`: v3, first version of the server. Separate from the other branches.**
+> See [BRANCHES.md](BRANCHES.md) for what each branch is. Design: [docs/pipeline.md](docs/pipeline.md).
 
 # Qual LLM Studio
 
-Executable qualitative methods: **strict store, free agents.**
+A memory server for qualitative analysis: **a strict ontology the agent cannot break, behind an MCP server; the method itself stays open.**
 
-A method (Gioia, for now) is a *recipe*: a short YAML document that names the objects of the analysis, how they may be linked, and the steps. Agents work with it freely in any harness (pi, Claude Code, Cowork), but the only way to change the analysis is through `qls` tools, and those tools refuse bad input. A quote that is not in the transcript, a concept without evidence, a theme with one concept, a memo about nothing: each is refused with a reason and a hint (for a quote, the closest real passage and its offsets).
+| Part | Holds | Is |
+|---|---|---|
+| **MCP server** (`qls mcp`) | ontology, verified evidence, memory (memos, codebook), history | strict: refuses what breaks the method's form |
+| **Method** (`qls/methods/gioia/`) | schema, actions, and a guide to doing Gioia | open: the agent reads the guide and interprets |
+| **Harness** | the model and its loop | any MCP client: Claude Code, Cowork, others |
 
-Every write is an event in an append-only log, so a run can be **replayed** (same graph, same hash), **forked** at any event, and **compared** with other runs, models or researchers. That is the point: every interpretive choice is logged, replayable, and measured for stability.
+The analysis lives in **TypeDB**, whose schema *is* the ontology. The database itself refuses a concept without a quote, a theme with one concept, a concept in two themes, a dimension that does not say how it answers the research question, a memo about nothing. Quotes are checked against the transcript **in the same call** that adds a concept, while the interview is still in the agent's context; a quote that is not in the transcript is refused and nothing is saved.
 
-```
-sources (txt/md/srt/vtt, or anything Docling reads)
-   │  immutable, versioned; turns and informant segments as offset ranges
-   ▼
-run = recipe + config + event log ──► graph view (objects, links, statuses)
-   ▲          ▲            ▲
-   │          │            └── researcher: qls review / respond / resume  (CLI only)
-   │          └── agent tools over MCP or a shell wrapper, bound to one run and actor
-   └── qls run fork --at N · replay · compare · diff · report
-```
-
-The 2025 v1 pipeline (fixed stages, one-shot prompts) is in [legacy/qls_v1](legacy/qls_v1); the Gradio tool is in [legacy/](legacy/). Plans and background: [ROADMAP.md](ROADMAP.md).
+Every change is an event in an append-only log (SQLite) with the TypeQL it ran, so a run can be **replayed** (identical graph, checked by hash), **forked** at any event, and **compared** with other runs: same question (reliability) or different question (does the analysis follow the intent?).
 
 ## Install
 
 ```bash
-pip install -e ".[mcp]"            # add [docling] for PDF/DOCX/audio ingestion
-npm install -g @mariozechner/pi-coding-agent   # only for `qls agent pi`
+pip install -e ".[dev]"                  # add [docling] for PDF/DOCX/audio ingestion
 ```
 
-`qls` itself calls no model. Model access belongs to the harness: an API key in pi, or Claude Code / Cowork's own model.
+TypeDB 3 server (one binary, MPL-2.0):
+
+```bash
+curl -LO https://repo.typedb.com/public/public-release/raw/names/typedb-all-linux-x86_64/versions/3.12.1/typedb-all-linux-x86_64-3.12.1.tar.gz
+tar xzf typedb-all-linux-x86_64-3.12.1.tar.gz && cd typedb-all-linux-x86_64-3.12.1
+./typedb server --storage.data-directory ./data --server.http.enabled false
+# macOS / Windows builds and Docker (typedb/typedb:3.12.1): https://typedb.com/docs
+```
+
+`qls` connects to `127.0.0.1:1729` as `admin`/`password` by default; set `QLS_TYPEDB`, `QLS_TYPEDB_USER`, `QLS_TYPEDB_PASSWORD` (or `[typedb]` in `qls.toml`) otherwise. `qls doctor` checks the connection.
 
 ## Quick start
 
 ```bash
 qls init my-study && cd my-study
-$EDITOR context/*.md                     # research question and study context (frozen into each run)
-qls ingest ~/interviews/*.txt
-qls sources                              # check segments per transcript
-qls run new r1 --recipe gioia            # optional --config run.yaml (order_seed, board, ...)
+$EDITOR intent.yaml                      # research question, method, stance: frozen into each run
+qls ingest ~/interviews/*.docx           # txt/md/srt/vtt directly; other formats via Docling
+qls sources                              # check informant segments per transcript
+qls run new r1                           # one TypeDB database per run
+qls mcp-config r1 --actor agent:scholar-1 > .mcp.json
 ```
 
-Attach an agent, in one of three ways:
+Open Claude Code (or Cowork) in that folder; the `qls` server's tools appear. A starting prompt:
+
+> Read intent(), method_guide() and ways_of_working(). We are calibrating: work through two interviews
+> with begin(), then checkpoint() so I can review your concepts and the codebook.
+
+The agent stops at the checkpoint; writes are blocked until you have looked:
 
 ```bash
-# Claude Code or Cowork: add the MCP server, then paste the task prompt
-qls agent mcp-config r1 --actor agent:claude-1 > .mcp.json
-qls agent prompt r1 --actor agent:claude-1 --step calibrate --sources P01 P02
-
-# pi, headless, with the shell transport
-qls agent pi r1 --actor agent:pi-1 --provider anthropic --model claude-opus-5-5 --step code
-
-# any script
-qls tool r1 add_quote '{"source": "P01", "text": "..."}' --actor agent:script
-```
-
-When the recipe reaches a checkpoint the agent calls `checkpoint()`, and writes are blocked until the researcher has looked:
-
-```bash
-qls review r1                            # what changed since the last checkpoint, uncertainty memos first
+qls review r1                            # its questions and uncertainty memos first, then what changed
+qls respond r1 --approve CB-1 --set use_when="..."
 qls respond r1 --reject C-7 --reason "describes the tool, not the practice"
-qls respond r1 --edit T-2 --set label="Working around the release cycle" --reason "closer to their words"
+qls respond r1 --revise T-2 --set label="Working around the release cycle" --reason "closer to their words"
 qls respond r1 --answer "Treat 'legacy' as a theme only when they describe change over time."
 qls resume r1
 ```
 
-Then compare and report:
+Results:
 
 ```bash
-qls run fork r1 --at 120 --as r1-alt     # branch after event 120, e.g. with another model
-qls run replay r1                        # rebuild from the log; the state hash must match
-qls compare r1 r2                        # segment-level agreement per level: Rand, ARI, NMI, pair-F1
-qls diff r1 r1-alt                       # objects and links that differ
-qls report r1 --format html -o reports/r1.html   # Gioia figure, claim -> quote table, decisions
+qls report r1 --format html -o reports/r1.html   # Gioia figure, claim -> quote table, codebook, memos, decisions
+qls run replay r1                                # rebuild from the log; the graph must be identical
+qls run fork r1 --at 40 --as r1-alt              # branch after event 40 (another model, another scholar...)
+qls compare r1 r2                                # which passages each run coded, and structure per level
+qls query r1 'match $c isa concept, has id $i; not { theme-membership (concept: $c); }; select $i;'
 ```
 
-## What the store enforces (Gioia recipe)
+Several scholars can work on one run at once (each with its own `--actor`): they share the graph and the codebook, and keep their own memos. `qls tool r1 add_concept '{...}' --actor agent:x` calls any tool from a shell.
 
-| Object | Rule |
-|---|---|
-| Quote | verified against the source (exact, normalised, or fuzzy ≥ 90); informant words only; stored as offsets |
-| Concept | in-vivo label and description; ≥ 1 quote, each link with a reason |
-| Theme | label and definition; ≥ 2 concepts with reasons; a concept is in at most one theme |
-| Dimension | ≥ 1 theme; a theme is in at most one dimension |
-| Memo | about ≥ 1 object or source; interview → batch → corpus memos must cite the level below; length budgets |
-| Codebook entry, Term | written by the researcher; agents can only propose |
-| anything | never deleted: superseded or rejected, with a reason; incoming links move to the replacement |
+## The tools an agent gets
 
-Softer expectations (every interview has a memo, every concept is placed, negative cases are looked for) are reported by `check()` and `qls status`, not enforced.
+- **Orient:** `intent`, `method_guide`, `ways_of_working`, `list_sources`, `status`, `check`, `feedback`
+- **Read one interview:** `begin(source)` gives the interview, the codebook and your notes on it; `read_source`
+- **Look up instead of remembering:** `search`, `get`, `pack` (everything behind a concept, theme or dimension), `memos`, `codebook`, `history`, `query` (read-only TypeQL)
+- **Method actions (from `actions.yaml`):** `add_concept` (with quotes), `add_theme`, `add_dimension`
+- **Revise:** `add_evidence`, `add_to_group`, `remove_from_group`, `revise`, `merge`, `withdraw` (all with reasons)
+- **Memory:** `memo` (note / interview / batch / corpus levels; higher levels cite lower ones), `propose_codebook`
+- **Stop:** `checkpoint(summary, questions)`
 
-`qls recipe gioia` shows the full recipe and `qls guide` prints the agents' ways of working ([qls/agents/AGENTS.md](qls/agents/AGENTS.md)). A new method is a new YAML file: `qls run new r1 --recipe my-method.yaml`.
+Researcher-only actions (`approve`, `reject`, `answer`, `resume`) are in the CLI, never in the MCP server.
+
+## A method is three files
+
+```
+qls/methods/gioia/
+  schema.tql     nouns: concept, theme, dimension and their rules (on top of qls/schema/core.tql)
+  actions.yaml   verbs: which tools exist, their fields, how groups form, soft checks as TypeQL
+  method.md      how to think: the open-ended guide the agent reads
+```
+
+`qls run new r1 --method path/to/my-method/` uses another one; the server needs no new code.
 
 ## Tests
 
 ```bash
-pip install -e ".[dev]" && pytest
+pytest                                   # ingestion tests run anywhere
+QLS_TYPEDB=127.0.0.1:1729 pytest         # plus the ontology and server tests against TypeDB
 ```
 
 ## License
 
-Apache 2.0, see [LICENSE](LICENSE).
+Apache 2.0, see [LICENSE](LICENSE). TypeDB is MPL-2.0.

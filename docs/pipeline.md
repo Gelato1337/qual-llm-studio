@@ -1,6 +1,6 @@
 # The pipeline: a memory server for qualitative analysis
 
-Status: design, October 2026. Branch `claude/typedb-mcp`. Supersedes the recipe-in-the-server design on
+Status: first version implemented (October 2026), see README and docs/smoke-tests/2026-10-07-typedb-server.md. Branch `claude/typedb-mcp`. Supersedes the recipe-in-the-server design on
 `claude/executable-protocol` (kept for reference).
 
 ## One idea

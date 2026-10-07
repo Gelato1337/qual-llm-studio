@@ -7,7 +7,7 @@ import pytest
 
 ADDR = os.environ.get("QLS_TYPEDB")
 pytestmark = pytest.mark.skipif(not ADDR, reason="set QLS_TYPEDB to a TypeDB 3 server")
-SCHEMA = Path(__file__).resolve().parent.parent / "schema"
+QLS = Path(__file__).resolve().parent.parent / "qls"
 
 
 @pytest.fixture(scope="module")
@@ -29,13 +29,13 @@ def db():
                 tx.commit()
             return rows
 
-    for f in ("core.tql", "methods/gioia.tql"):
-        q((SCHEMA / f).read_text(), TransactionType.SCHEMA)
-    q('insert $s isa source, has id "P01", has version 1;'
+    for f in ("schema/core.tql", "methods/gioia/schema.tql"):
+        q((QLS / f).read_text(), TransactionType.SCHEMA)
+    q('insert $s isa source, has id "P01", has version 1; $i isa intent, has id "intent";'
       + "".join(f' $q{i} isa quote, has id "Q-{i}", has start-offset {i}, has end-offset {i + 5}, has unit "P01:s00{i}";'
                 f' quoting (source: $s, quote: $q{i});' for i in range(1, 5)))
     for i in range(1, 5):
-        q(f'match $q isa quote, has id "Q-{i}"; insert $c isa concept, has id "C-{i}", has label "c{i}", has status "active";'
+        q(f'match $q isa quote, has id "Q-{i}"; insert $c isa concept, has id "C-{i}", has label "c{i}";'
           f' $e isa evidence (claim: $c, quote: $q), has reason "says it";')
     q.read = lambda s: q(s, TransactionType.READ)
     yield q
@@ -58,6 +58,11 @@ def test_concept_needs_quote_with_reason(db):
     assert refused(db, 'match $c isa concept, has id "C-1"; $e isa evidence (claim: $c); delete $e;')
 
 
+def test_no_dangling_relations(db):
+    # deleting a concept while its relations stay would leave empty roles: refused
+    assert refused(db, 'match $c isa concept, has id "C-4"; delete $c;')
+
+
 def test_memo_must_be_about_something(db):
     assert refused(db, 'insert $m isa memo, has id "M-9", has memo-kind "meaning", has body "x";')
     assert refused(db, 'match $c isa concept, has id "C-1"; insert $m isa memo, has id "M-9", has memo-kind "feeling",'
@@ -77,8 +82,11 @@ def test_gioia_hierarchy(db):
                        ' insert $t isa theme, has id "T-2", has label "t";'
                        ' $m isa theme-membership (theme: $t, concept: $a), has reason "r";'
                        ' $n isa theme-membership (theme: $t, concept: $b), has reason "r";')  # C-1 already placed
-    assert not refused(db, 'match $t isa theme, has id "T-1"; insert $d isa dimension, has id "D-1", has label "d";'
-                           ' $m isa dimension-membership (dimension: $d, theme: $t), has reason "r";')
+    assert refused(db, 'match $t isa theme, has id "T-1"; insert $d isa dimension, has id "D-1", has label "d";'
+                       ' $m isa dimension-membership (dimension: $d, theme: $t), has reason "r";')  # must answer the question
+    assert not refused(db, 'match $t isa theme, has id "T-1"; $i isa intent; insert $d isa dimension, has id "D-1", has label "d";'
+                           ' $m isa dimension-membership (dimension: $d, theme: $t), has reason "r";'
+                           ' $a isa answering (answer: $d, question: $i), has reason "how";')
     rows = db.read('match $d isa dimension, has id "D-1"; let $q in dimension_quotes($d); $q has id $i; select $i;')
     assert sorted(r.get("i").get_value() for r in rows) == ["Q-1", "Q-2"]
     rows = db.read('match $x isa code, has id $i; select $i;')  # method-agnostic view

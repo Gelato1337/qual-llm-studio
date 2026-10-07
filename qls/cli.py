@@ -1,27 +1,35 @@
-"""qls: run CLI (outside the agent) and a shell transport for agent tools.
+"""qls: the researcher's command line, and a shell transport for agent tools.
 
-Researcher / experimenter:
-    qls init DIR                      create a project
-    qls ingest FILES...               add sources (txt/md/srt/vtt, or anything Docling reads)
+Set up:
+    qls init DIR                        project folder with qls.toml and intent.yaml
+    qls doctor                          check TypeDB and the MCP SDK
+    qls ingest FILES...                 add sources (txt/md/srt/vtt, or anything Docling reads)
     qls sources
-    qls run new NAME --recipe gioia [--config cfg.yaml] [--no-board]
-    qls run fork RUN --at SEQ --as NAME     branch from any event
-    qls run replay RUN                rebuild the graph from the log and verify it is identical
-    qls runs | status RUN | log RUN [--since N]
-    qls review RUN                    what the agent did since the last checkpoint, uncertainty first
-    qls respond RUN --approve | --reject ID --reason R | --edit ID --set k=v --reason R | --answer TEXT
-    qls resume RUN
-    qls compare RUN_A RUN_B
-    qls report RUN [--format md|html] [-o FILE]   data structure, claim -> quote table, decisions
-    qls diff RUN_A RUN_B              objects and links that differ, plus agreement
-    qls recipes | recipe NAME | guide
-    qls mcp --run RUN --actor agent:NAME       MCP server for a harness
-    qls agent prompt RUN --actor agent:NAME [--step code] [--sources P01 P02] [--transport mcp|shell]
-    qls agent mcp-config RUN --actor agent:NAME [--model M]   .mcp.json entry (Claude Code, Cowork)
-    qls agent pi RUN --actor agent:NAME --provider P --model M  launch pi with the shell transport
 
-Agents in a shell (pi, scripts):
-    qls tool RUN NAME '{"json": "args"}'      actor from --actor or $QLS_ACTOR
+Runs (one TypeDB database each):
+    qls run new NAME [--intent intent.yaml] [--question "..."] [--method gioia|DIR] [--sources P01 P02]
+    qls run fork RUN --at N --as NAME   branch after event N (default: latest)
+    qls run replay RUN                  rebuild from the log; the graph must be identical
+    qls run drop RUN                    delete the run and its database
+    qls runs | status RUN | log RUN [--since N] | check RUN
+
+Researcher at a checkpoint:
+    qls review RUN                      what happened since the last checkpoint; questions and uncertainty first
+    qls respond RUN --approve CB-3 [--set use_when="..."] | --reject ID --reason R
+                    | --revise ID --set label="..." --reason R | --answer "..."
+    qls resume RUN
+
+Agents:
+    qls mcp --run RUN --actor agent:NAME [--model M]      MCP server (stdio)
+    qls mcp-config RUN --actor agent:NAME                 .mcp.json entry for Claude Code / Cowork
+    qls tool RUN NAME '{"json": "args"}' --actor A        any tool from the shell
+    qls tools RUN --actor A                               list tools
+
+Results:
+    qls report RUN [--format md|html] [-o FILE]
+    qls compare RUN_A RUN_B             selection and structure agreement on informant segments
+    qls query RUN 'match ... select ...;'
+    qls methods | method NAME | guide
 """
 
 from __future__ import annotations
@@ -42,203 +50,284 @@ def _p(a):
     return Project.find(a.project)
 
 
-def _session(a, run: str, actor: str | None):
-    from .tools import Session
+def _s(a, run: str, actor: str | None = None):
+    from .session import Session
 
-    actor = actor or os.environ.get("QLS_ACTOR")
+    actor = actor or getattr(a, "actor", None) or os.environ.get("QLS_ACTOR")
     if not actor:
-        raise QlsError("Who is acting? Pass --actor (agent:NAME or human:NAME) or set QLS_ACTOR.")
-    return Session(_p(a).store, run, actor, os.environ.get("QLS_MODEL"))
+        raise QlsError("Who is acting? Pass --actor (agent:NAME, human:NAME, reviewer:NAME) or set QLS_ACTOR.")
+    return Session(_p(a), run, actor, os.environ.get("QLS_MODEL"))
+
+
+def _researcher(a) -> str:
+    actor = getattr(a, "actor", None) or os.environ.get("QLS_ACTOR") or ""
+    return actor if actor.startswith("human") else f"human:{os.environ.get('USER', 'researcher')}"
 
 
 def _out(obj) -> None:
-    print(json.dumps(obj, ensure_ascii=False, indent=1) if not isinstance(obj, str) else obj)
+    print(obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False, indent=1, default=str))
 
+
+def _sets(items: list[str] | None) -> dict:
+    out = {}
+    for it in items or []:
+        if "=" not in it:
+            raise QlsError(f"--set expects key=value, got {it!r}")
+        k, v = it.split("=", 1)
+        out[k.strip()] = v
+    return out
+
+
+# -- set up ---------------------------------------------------------------------
 
 def cmd_init(a):
     from .project import Project
 
     p = Project.init(a.dir, a.name)
-    print(f"Initialised {p.root}. Next: edit context/*.md, then `qls ingest <files>`.")
+    print(f"Project at {p.root}. Next: write intent.yaml, start TypeDB, `qls ingest` the interviews, `qls run new r1`.")
+
+
+def cmd_doctor(a):
+    from .graph import Graph
+
+    try:
+        p = _p(a)
+        g = p.graph
+    except QlsError:
+        g = Graph()
+    try:
+        names = [d.name for d in g.driver.databases.all()]
+        print(f"TypeDB at {g.address}: reachable, {len(names)} database(s).")
+    except QlsError as exc:
+        print(f"TypeDB: {exc}")
+    try:
+        import mcp  # noqa: F401
+
+        print("MCP SDK: installed.")
+    except ImportError:
+        print("MCP SDK: missing (pip install 'qual-llm-studio[mcp]').")
 
 
 def cmd_ingest(a):
     p = _p(a)
-    if a.id and len(a.files) > 1:
-        raise QlsError("--id works with one file")
     for f in a.files:
-        r = p.ingest(f, a.id, a.participant, a.interviewer)
-        roles = ", ".join(f"{k}={v}" for k, v in r["speakers"].items()) or "no speaker labels"
-        print(f"{r['id']} v{r['version']}: {r['turns']} turns, {r['segments']} informant segments [{roles}] via {r['parser']}")
+        r = p.ingest(f, a.id if len(a.files) == 1 else None, a.participant, a.interviewer)
+        roles = ", ".join(f"{k}={v}" for k, v in r["speakers"].items())
+        print(f"{r['id']} v{r['version']}: {r['segments']} informant segments, {r['turns']} turns ({r['parser']}); {roles}")
 
 
 def cmd_sources(a):
-    st = _p(a).store
-    for sid in st.source_ids():
-        s = st.source(sid)
-        segs = sum(1 for u in s["units"] if u["kind"] == "segment")
-        print(f"{sid:<20} v{s['version']}  {segs:>4} segments  {len(s['text']):>8} chars  {s['meta'].get('participant', '')}")
+    L = _p(a).ledger
+    for s in L.sources():
+        src = L.source(s["id"])
+        segs = sum(1 for u in src["units"] if u["kind"] == "segment")
+        print(f"{s['id']:<20} v{s['version']}  {segs:>4} segments  {len(src['text']):>8} chars  {src['title']}")
 
+
+# -- runs -----------------------------------------------------------------------
 
 def cmd_run_new(a):
-    import yaml
-
-    from .recipe import load_recipe
-
     p = _p(a)
-    config = yaml.safe_load(Path(a.config).read_text()) if a.config else {}
-    config = config or {}
-    recipe_name = a.recipe or config.get("recipe") or "gioia"
-    rec = load_recipe(recipe_name)
-    if Path(recipe_name).suffix in (".yaml", ".yml"):
-        config["recipe_path"] = str(Path(recipe_name).resolve())
-    if a.no_board:
-        config["board"] = False
-    config.setdefault("context_hash", p.context_hash())
-    config.setdefault("context", p.context_files())
-    p.store.create_run(a.name, rec.name, rec.hash, config)
-    print(f"Run {a.name} created (recipe {rec.name} {rec.hash[:19]}).")
+    intent = p.read_intent(a.intent, research_question=a.question, stance=a.stance)
+    config = {"note": a.note} if a.note else {}
+    r = p.new_run(a.name, a.method or intent.get("method"), intent, a.sources, config)
+    print(f"Run {r['run']} created: method {r['method']}, {r['sources']} sources, TypeDB database {r['db']}.")
+    print(f"Attach an agent: qls mcp-config {r['run']} --actor agent:scholar-1")
 
 
 def cmd_run_fork(a):
-    p = _p(a)
-    src = p.store.run(a.run)
-    if a.at is not None and not any(e["seq"] == a.at for e in p.store.effective_events(a.run)):
-        raise QlsError(f"Event #{a.at} is not in the history of {a.run}")
-    at = a.at if a.at is not None else max([e["seq"] for e in p.store.effective_events(a.run)] or [0])
-    config = dict(src["config"], forked_from=a.run, fork_at=at, fork_note=a.note or "")
-    p.store.create_run(a.name, src["recipe"], src["recipe_hash"], config, parent=a.run, fork_at=at)
-    print(f"Run {a.name} forked from {a.run} at #{at}.")
+    r = _p(a).fork(a.run, a.name, a.at, a.note or "")
+    print(f"Run {r['run']} forked from {r['parent']} after event #{r['fork_at']} ({r['events']} events replayed).")
 
 
 def cmd_run_replay(a):
-    st = _p(a).store
-    before = st.state_hash(a.run)
-    st.rebuild(a.run)
-    after = st.state_hash(a.run)
-    print(f"{a.run}: {len(st.effective_events(a.run))} events replayed; graph {'identical' if before == after else 'DIFFERENT'} ({after[:19]})")
-    if before != after:
+    r = _p(a).replay(a.run)
+    verdict = "identical" if r["identical"] else "DIFFERENT"
+    print(f"{a.run}: {r['events']} events replayed; graph {verdict} ({r['live'][:19]} vs {r['replayed'][:19]})")
+    if not r["identical"]:
         sys.exit(1)
 
 
+def cmd_run_drop(a):
+    if not a.yes:
+        raise QlsError(f"This deletes run {a.run}, its log and its TypeDB database. Add --yes.")
+    _p(a).drop_run(a.run)
+    print(f"Run {a.run} dropped.")
+
+
 def cmd_runs(a):
-    for r in _p(a).store.runs():
-        fork = f" forked from {r['parent']}@#{r['fork_at']}" if r["parent"] else ""
-        print(f"{r['id']:<24} {r['recipe']:<10} {r['status']:<8}{fork}")
+    for r in _p(a).ledger.runs():
+        fork = f"  fork of {r['parent']}@{r['fork_at']}" if r["parent"] else ""
+        print(f"{r['id']:<20} {r['method']:<10} {r['status']:<8} {r['created']}{fork}")
 
 
 def cmd_status(a):
-    _out(_session(a, a.run, a.actor or "human").status())
+    _out(_s(a, a.run, a.actor or "reviewer:cli").status())
+
+
+def cmd_check(a):
+    _out(_s(a, a.run, a.actor or "reviewer:cli").check())
 
 
 def cmd_log(a):
-    for e in _p(a).store.events(a.run, since=a.since):
-        p = e["payload"]
-        what = p.get("id") or p.get("src") or ",".join(p.get("old", [])) or p.get("action") or ""
-        extra = f" {p.get('type', '')}" if e["kind"] == "create" else (f" {p.get('rel')} -> {p.get('dst')}" if "rel" in p else "")
-        print(f"#{e['seq']:<5} {e['run']:<14} {e['actor']:<22} {e['kind']:<10} {what}{extra}  {e['reason'][:80]}")
+    from .report import what
+
+    for e in _p(a).ledger.events(a.run, since=a.since):
+        ids = ", ".join(e["result"].get("ids", []))
+        detail = what(e) or ids or (e["params"].get("label") or e["params"].get("source") or "")
+        reason = "" if e["reason"] in (str(detail), e["params"].get("label")) else e["reason"]
+        print(f"#{e['seq']:<5} {e['actor']:<22} {e['action']:<18} {str(detail)[:70]:<70} {reason[:60]}")
 
 
-def cmd_tool(a):
-    from .tools import call
-
-    args = json.loads(a.args) if a.args else {}
-    _out(call(_session(a, a.run, a.actor), a.name, args))
-
+# -- researcher -----------------------------------------------------------------
 
 def cmd_review(a):
-    from .tools import Session
-
-    st = _p(a).store
-    s = Session(st, a.run, "human")
-    r = st.run(a.run)
-    evs = st.events(a.run)
-    cps = [e for e in evs if e["kind"] == "checkpoint"]
-    since = max([e["seq"] for e in evs if e["kind"] in ("resume",)] + [0])
-    print(f"Run {a.run}: {r['status']}")
-    if cps:
-        cp = cps[-1]["payload"]
-        print(f"\nCheckpoint #{cps[-1]['seq']} by {cps[-1]['actor']}\n  {cp['summary']}")
-        for q in cp.get("questions", []):
-            print(f"  ? {q}")
-    new = [e for e in evs if e["seq"] > since and e["kind"] == "create"]
-    memos = [e for e in new if e["payload"]["type"] == "Memo"]
-    unc = [m for m in memos if m["payload"]["fields"].get("kind") == "uncertainty"]
-    print(f"\nUncertainty memos ({len(unc)}), read these first:")
-    for m in unc:
-        about = ", ".join(l["to"] for l in m["payload"]["links"] if l["rel"] == "about")
-        print(f"  {m['payload']['id']} about {about}: {m['payload']['fields']['text']}")
-    print("\nCreated since last resume:")
+    s = _s(a, a.run, "reviewer:cli")
+    p = s.L
+    r = s.run
+    evs = p.events(a.run)
+    last = max([e["seq"] for e in evs if e["action"] in ("resume", "setup")] or [0])
+    new = [e for e in evs if e["seq"] > last]
+    print(f"Run {a.run}: {r['status']}" + (f" at checkpoint #{r['checkpoint_seq']}" if r["status"] == "waiting" else ""))
+    print(f"Research question: {r['intent'].get('research_question')}\n")
     for e in new:
-        p = e["payload"]
-        if p["type"] in ("Memo", "Quote"):
-            continue
-        f = p["fields"]
-        print(f"  #{e['seq']} {p['id']} {p['type']}: {f.get('in_vivo') or f.get('label') or f.get('text', '')[:80]}")
-        for l in p["links"]:
-            text = ""
-            if l["to"].startswith("Q-"):
-                q = st.obj(a.run, l["to"])
-                text = f' "{s.quote_text(q)[:140]}"' if q else ""
-            print(f"      {l['rel']} {l['to']}{text}  | {l['reason']}")
-    other = [e for e in evs if e["seq"] > since and e["kind"] in ("link", "unlink", "update", "supersede")]
-    if other:
-        print("\nOther changes:")
-        for e in other:
-            print(f"  #{e['seq']} {e['kind']} {json.dumps(e['payload'], ensure_ascii=False)[:120]}  | {e['reason']}")
-    open_ = s.check()
-    if open_:
-        print(f"\nOpen expectations ({len(open_)}):")
-        for p in open_[:30]:
-            print(f"  {p['expectation']}: {p['item']}")
-    print(f"\nRespond: qls respond {a.run} --approve | --reject ID --reason R | --edit ID --set k=v --reason R | --answer TEXT;"
-          f" then qls resume {a.run}")
+        if e["action"] == "checkpoint":
+            print(f"Checkpoint #{e['seq']} by {e['actor']}: {e['params']['summary']}")
+            for q in e["params"].get("questions") or []:
+                print(f"  ? {q}")
+    unc = [m for m in s.memos()["memos"] if m["kind"] in ("uncertainty", "negative-case")]
+    if unc:
+        print("\nUncertainty and negative cases:")
+        for m in unc:
+            print(f"  {m['id']} ({m['kind']}) about {', '.join(m['about'])}: {m['text'][:300]}")
+    props = [e for e in s.codebook()["entries"] if e["status"] == "proposed"]
+    if props:
+        print("\nCodebook proposals (qls respond RUN --approve ID | --reject ID --reason R):")
+        for e in props:
+            print(f"  {e['id']} {e['label']} (by {e['by']}): {e['definition']}")
+    counts = {}
+    for e in new:
+        counts[e["action"]] = counts.get(e["action"], 0) + 1
+    print(f"\nSince #{last}: " + ", ".join(f"{k} {v}" for k, v in counts.items()))
+    created = [(e["result"].get("id"), e["params"].get("label")) for e in new if e["action"] in s.m.actions]
+    for cid, label in created[:80]:
+        print(f"  + {cid} {label}")
+    open_ = s.check()["open"]
+    print(f"\nStill open: {len(open_)} (qls check {a.run})")
+    print(f"Full detail: qls report {a.run} --format html -o reports/{a.run}.html")
 
 
 def cmd_respond(a):
-    s = _session(a, a.run, a.actor or os.environ.get("QLS_HUMAN") or "human")
+    s = _s(a, a.run, _researcher(a))
     if a.approve:
-        print(f"approved (#{s.approve(a.text or '')})")
-    if a.answer:
-        print(f"answer recorded (#{s.answer(a.answer)})")
-    if a.reject:
+        _out(s.approve(a.approve, _sets(a.set), a.reason or ""))
+    elif a.reject:
         if not a.reason:
             raise QlsError("--reject needs --reason")
         _out(s.reject(a.reject, a.reason))
-    if a.edit:
-        if not a.reason or not a.set:
-            raise QlsError("--edit needs --set field=value and --reason")
-        fields = dict(kv.split("=", 1) for kv in a.set)
-        _out(s.edit(a.edit, fields, a.reason))
+    elif a.revise:
+        if not a.reason:
+            raise QlsError("--revise needs --reason")
+        _out(s.revise(a.revise, _sets(a.set), a.reason))
+    elif a.answer:
+        _out(s.answer(a.answer))
+    else:
+        raise QlsError("Give --approve, --reject, --revise or --answer.")
 
 
 def cmd_resume(a):
-    s = _session(a, a.run, a.actor or os.environ.get("QLS_HUMAN") or "human")
-    print(f"resumed (#{s.resume()})")
+    _out(_s(a, a.run, _researcher(a)).resume(a.note or ""))
+
+
+# -- agents ---------------------------------------------------------------------
+
+def cmd_mcp(a):
+    from .server import main
+
+    main(a.project, a.run, a.actor, a.model)
+
+
+def cmd_mcp_config(a):
+    p = _p(a)
+    p.ledger.run(a.run)
+    args = ["-m", "qls", "mcp", "--project", str(p.root), "--run", a.run, "--actor", a.actor]
+    if a.model:
+        args += ["--model", a.model]
+    env = {k: os.environ[k] for k in ("QLS_TYPEDB", "QLS_TYPEDB_USER", "QLS_TYPEDB_PASSWORD") if k in os.environ}
+    entry = {"command": sys.executable, "args": args}
+    if env:
+        entry["env"] = env
+    _out({"mcpServers": {"qls": entry}})
+
+
+def cmd_tool(a):
+    args = json.loads(a.args) if a.args else {}
+    _out(_s(a, a.run).call(a.name, args))
+
+
+def cmd_tools(a):
+    s = _s(a, a.run)
+    for name in s.tools():
+        fn = getattr(s, name, None)
+        doc = (s.m.actions[name].doc if name in s.m.actions else (fn.__doc__ or "")).split("\n")[0].strip()
+        print(f"{name:<20} {doc[:110]}")
+
+
+# -- results --------------------------------------------------------------------
+
+def cmd_report(a):
+    from .report import build, to_html, to_markdown
+
+    rep = build(_s(a, a.run, "reviewer:report"))
+    txt = to_html(rep) if a.format == "html" else to_markdown(rep)
+    if a.output:
+        Path(a.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(a.output).write_text(txt, encoding="utf-8")
+        print(f"wrote {a.output}")
+    else:
+        print(txt)
 
 
 def cmd_compare(a):
-    from .analysis import compare
+    from .analysis import compare_groups, segment_groups
 
-    r = compare(_p(a).store, a.a, a.b)
+    sa, sb = _s(a, a.a, "reviewer:cli"), _s(a, a.b, "reviewer:cli")
+    if sa.m.levels() != sb.m.levels():
+        print(f"note: different methods ({sa.m.name} vs {sb.m.name}); comparing selection and the code level only")
+    levels = sa.m.levels() if sa.m.levels() == sb.m.levels() else [sa.m.code_type]
+    ga = segment_groups(sa.G, sa.db, sa.m)
+    gb = segment_groups(sb.G, sb.db, sb.m)
+    if levels != sa.m.levels():
+        gb = {levels[0]: gb[sb.m.code_type]}
+    r = compare_groups(ga, gb, levels)
     if a.json:
-        return _out(r)
-    print(f"{a.a} vs {a.b}, compared on informant segments")
+        _out(r)
+        return
+    same = sa.run["intent"].get("research_question") == sb.run["intent"].get("research_question")
+    print(f"{a.a} vs {a.b}: {'same' if same else 'DIFFERENT'} research question")
+    sel = r["selection"]
+    print(f"  selection  coded segments {sel['segments_a']} / {sel['segments_b']}, both {sel['both']}, Jaccard {sel['jaccard']}")
     for lvl, sc in r["levels"].items():
-        print(f"  {lvl:<10} n={sc['n']:<5} Rand={sc['rand']} ARI={sc['ari']} NMI={sc['nmi']} pairF1={sc['pair_f1']}"
-              f"  groups {sc['groups_a']}/{sc['groups_b']}")
+        print(f"  {lvl:<10} n={sc['n']:<4} Rand={sc['rand']} ARI={sc['ari']} NMI={sc['nmi']} pairF1={sc['pair_f1']}  "
+              f"groups {sc['groups_a']}/{sc['groups_b']}")
 
 
-def cmd_recipes(a):
-    from .recipe import builtin_recipes
-
-    print("\n".join(builtin_recipes()))
+def cmd_query(a):
+    _out(_s(a, a.run, "reviewer:cli").query(a.typeql))
 
 
-def cmd_recipe(a):
-    from .recipe import load_recipe
+def cmd_methods(a):
+    from .method import builtin_methods
 
-    _out(load_recipe(a.name).summary())
+    print("\n".join(builtin_methods()))
+
+
+def cmd_method(a):
+    from .method import load_method
+
+    m = load_method(a.name)
+    print(m.guide)
+    _out(m.summary())
 
 
 def cmd_guide(a):
@@ -247,150 +336,105 @@ def cmd_guide(a):
     print(resources.files("qls.agents").joinpath("AGENTS.md").read_text(encoding="utf-8"))
 
 
-def cmd_mcp(a):
-    from .server import main
-
-    main(a.project, a.run, a.actor or os.environ.get("QLS_ACTOR"), a.model, a.readonly)
-
-
-def cmd_agent_prompt(a):
-    from .agent import task_prompt
-
-    _out(task_prompt(_p(a), a.run, a.actor, a.step, a.sources, a.transport))
-
-
-def cmd_agent_mcp_config(a):
-    from .agent import mcp_config
-
-    _out(mcp_config(_p(a), a.run, a.actor, a.model))
-
-
-def cmd_agent_pi(a):
-    from .agent import launch_pi
-
-    info = launch_pi(_p(a), a.run, a.actor, a.provider, a.model, a.thinking, a.step, a.sources, a.pi, a.timeout,
-                     log=lambda m: print(m, file=sys.stderr))
-    _out(info)
-
-
-def cmd_report(a):
-    from .report import build, to_html, to_markdown
-
-    rep = build(_p(a).store, a.run)
-    txt = to_html(rep) if a.format == "html" else to_markdown(rep)
-    if a.output:
-        Path(a.output).write_text(txt, encoding="utf-8")
-        print(f"wrote {a.output}")
-    else:
-        print(txt)
-
-
-def cmd_diff(a):
-    from .report import diff
-
-    _out(diff(_p(a).store, a.a, a.b))
-
-
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--project", help="project folder (default: search upwards or $QLS_PROJECT)")
-    common.add_argument("--json", action="store_true")
-    ap = argparse.ArgumentParser(prog="qls", description="Executable qualitative methods: strict store, free agents.")
+    ap = argparse.ArgumentParser(prog="qls", description="A memory server for qualitative analysis: strict ontology, free agents.")
     ap.add_argument("--version", action="version", version=f"qls {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    def add(name, fn, **kw):
-        sp = sub.add_parser(name, parents=[common], **kw)
+    def add(name, fn, parent=sub, **kw):
+        sp = parent.add_parser(name, parents=[common], **kw)
         sp.set_defaults(fn=fn)
         return sp
 
     sp = add("init", cmd_init, help="create a project")
     sp.add_argument("dir", nargs="?", default=".")
     sp.add_argument("--name")
+    add("doctor", cmd_doctor, help="check TypeDB and the MCP SDK")
     sp = add("ingest", cmd_ingest, help="add sources")
     sp.add_argument("files", nargs="+")
     sp.add_argument("--id")
     sp.add_argument("--participant")
-    sp.add_argument("--interviewer", action="append")
+    sp.add_argument("--interviewer", action="append", help="extra interviewer speaker label")
     add("sources", cmd_sources, help="list sources")
 
-    run = sub.add_parser("run", help="create, fork and replay runs").add_subparsers(dest="sub", required=True)
-    sp = run.add_parser("new", parents=[common])
-    sp.set_defaults(fn=cmd_run_new)
+    run = sub.add_parser("run", help="create, fork, replay, drop runs").add_subparsers(dest="sub", required=True)
+    sp = add("new", cmd_run_new, run)
     sp.add_argument("name")
-    sp.add_argument("--recipe")
-    sp.add_argument("--config", help="YAML run config (model, order, context strategy, ...)")
-    sp.add_argument("--no-board", action="store_true")
-    sp = run.add_parser("fork", parents=[common])
-    sp.set_defaults(fn=cmd_run_fork)
+    sp.add_argument("--intent", help="intent file (default: intent.yaml)")
+    sp.add_argument("--question", help="research question (overrides the intent file)")
+    sp.add_argument("--stance")
+    sp.add_argument("--method", help="built-in method name or a method folder")
+    sp.add_argument("--sources", nargs="+")
+    sp.add_argument("--note")
+    sp = add("fork", cmd_run_fork, run)
     sp.add_argument("run")
-    sp.add_argument("--at", type=int, help="event number to branch after (default: latest)")
+    sp.add_argument("--at", type=int)
     sp.add_argument("--as", dest="name", required=True)
     sp.add_argument("--note")
-    sp = run.add_parser("replay", parents=[common])
-    sp.set_defaults(fn=cmd_run_replay)
+    sp = add("replay", cmd_run_replay, run)
     sp.add_argument("run")
+    sp = add("drop", cmd_run_drop, run)
+    sp.add_argument("run")
+    sp.add_argument("--yes", action="store_true")
 
     add("runs", cmd_runs, help="list runs")
-    for name, fn in (("status", cmd_status), ("review", cmd_review), ("resume", cmd_resume)):
+    for name, fn in (("status", cmd_status), ("check", cmd_check)):
         sp = add(name, fn)
         sp.add_argument("run")
         sp.add_argument("--actor")
-    sp = add("log", cmd_log, help="event log of a run (with inherited history)")
+    sp = add("log", cmd_log, help="event log")
     sp.add_argument("run")
     sp.add_argument("--since", type=int, default=0)
-    sp = add("respond", cmd_respond, help="researcher feedback at a checkpoint")
+    sp = add("review", cmd_review, help="what to look at, at a checkpoint")
     sp.add_argument("run")
-    sp.add_argument("--actor")
-    sp.add_argument("--approve", action="store_true")
-    sp.add_argument("--text")
-    sp.add_argument("--reject")
-    sp.add_argument("--edit")
-    sp.add_argument("--set", action="append")
+    sp = add("respond", cmd_respond, help="researcher decisions")
+    sp.add_argument("run")
+    sp.add_argument("--actor", help="human:NAME (default: human:$USER)")
+    sp.add_argument("--approve", metavar="ID")
+    sp.add_argument("--reject", metavar="ID")
+    sp.add_argument("--revise", metavar="ID")
+    sp.add_argument("--set", action="append", metavar="KEY=VALUE")
     sp.add_argument("--reason")
     sp.add_argument("--answer")
-    sp = add("tool", cmd_tool, help="call an agent tool (shell transport)")
+    sp = add("resume", cmd_resume, help="let agents continue")
+    sp.add_argument("run")
+    sp.add_argument("--actor")
+    sp.add_argument("--note")
+
+    sp = add("mcp", cmd_mcp, help="MCP server (stdio) bound to a run and a scholar")
+    sp.add_argument("--run")
+    sp.add_argument("--actor")
+    sp.add_argument("--model")
+    sp = add("mcp-config", cmd_mcp_config, help="print an .mcp.json entry")
+    sp.add_argument("run")
+    sp.add_argument("--actor", required=True)
+    sp.add_argument("--model")
+    sp = add("tool", cmd_tool, help="call a tool from the shell")
     sp.add_argument("run")
     sp.add_argument("name")
     sp.add_argument("args", nargs="?")
     sp.add_argument("--actor")
-    sp = add("compare", cmd_compare, help="structural agreement between two runs")
-    sp.add_argument("a")
-    sp.add_argument("b")
+    sp = add("tools", cmd_tools, help="list the tools an actor has")
+    sp.add_argument("run")
+    sp.add_argument("--actor")
+
     sp = add("report", cmd_report, help="readable report of a run")
     sp.add_argument("run")
     sp.add_argument("--format", choices=["md", "html"], default="md")
     sp.add_argument("-o", "--output")
-    sp = add("diff", cmd_diff, help="what differs between two runs")
+    sp = add("compare", cmd_compare, help="agreement between two runs")
     sp.add_argument("a")
     sp.add_argument("b")
-    add("recipes", cmd_recipes, help="list built-in recipes")
-    sp = add("recipe", cmd_recipe, help="show a recipe")
+    sp.add_argument("--json", action="store_true")
+    sp = add("query", cmd_query, help="read-only TypeQL")
+    sp.add_argument("run")
+    sp.add_argument("typeql")
+    add("methods", cmd_methods, help="built-in methods")
+    sp = add("method", cmd_method, help="show a method")
     sp.add_argument("name")
-    add("guide", cmd_guide, help="print AGENTS.md (ways of working)")
-    sp = add("mcp", cmd_mcp, help="MCP server (stdio) bound to a run and an actor")
-    sp.add_argument("--run")
-    sp.add_argument("--actor")
-    sp.add_argument("--model")
-    sp.add_argument("--readonly", action="store_true", help="read tools only (reviewers)")
-
-    agent = sub.add_parser("agent", help="attach an agent to a run").add_subparsers(dest="sub", required=True)
-    for name, fn in (("prompt", cmd_agent_prompt), ("mcp-config", cmd_agent_mcp_config), ("pi", cmd_agent_pi)):
-        sp = agent.add_parser(name, parents=[common])
-        sp.set_defaults(fn=fn)
-        sp.add_argument("run")
-        sp.add_argument("--actor", required=True)
-        if name != "mcp-config":
-            sp.add_argument("--step", action="append", help="recipe step id (repeatable; default: all)")
-            sp.add_argument("--sources", nargs="+")
-        if name != "prompt":
-            sp.add_argument("--model", required=name == "pi")
-    agent.choices["prompt"].add_argument("--transport", choices=["mcp", "shell"], default="mcp")
-    sp = agent.choices["pi"]
-    sp.add_argument("--provider", required=True)
-    sp.add_argument("--thinking", default="high")
-    sp.add_argument("--pi", default="pi", help="pi executable")
-    sp.add_argument("--timeout", type=int, default=7200)
+    add("guide", cmd_guide, help="ways of working (AGENTS.md)")
     return ap
 
 

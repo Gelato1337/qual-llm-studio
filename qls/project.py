@@ -1,40 +1,61 @@
-"""Project folder: settings, context files, the store, and ingestion.
+"""Project folder, ingestion, and run lifecycle (create, fork, replay).
 
-    qls.toml          settings
-    context/*.md      research question and study context (hashed into every run)
-    qls.db            sources, runs, event log, graph view (SQLite)
-    sources/          original files
-    corpus/text/      extracted text per source (Docling output is cached here)
+    qls.toml        settings (TypeDB connection, transcript parsing)
+    intent.yaml     research question, method, stance: frozen into each run at creation
+    qls.db          the ledger: sources, runs, event log (SQLite)
+    sources/        original files
+    corpus/text/    extracted text per source (Docling output is cached here)
+
+Each run is one TypeDB database named <prefix>_<run>.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tomllib
 from pathlib import Path
 
+import yaml
+
+from .graph import Graph, lit
 from .ingest import build_document, read_text, safe_id
-from .store import Store
-from .util import QlsError, sha256_bytes, sha256_text
+from .ledger import Ledger
+from .method import Method, core_schema, load_method
+from .util import QlsError, now, sha256_bytes
 
 CONFIG = "qls.toml"
 
 DEFAULT_CONFIG = """\
 [project]
 name = "{name}"
-label_language = "English"
+
+[typedb]
+# address = "127.0.0.1:1729"     # or $QLS_TYPEDB
+# user = "admin"                 # or $QLS_TYPEDB_USER
+# password = "password"          # or $QLS_TYPEDB_PASSWORD
+database_prefix = "{prefix}"
 
 [transcripts]
 interviewer_labels = ["I", "Q", "H", "Interviewer", "Haastattelija", "Moderator"]
 max_segment_chars = 2000
 """
 
-CONTEXT = {
-    "research_question.md": "# Research question\n\nThe question that guides coding.\n",
-    "study_context.md": "# Study context\n\nSetting, informants, sampling, and what kind of concept the study looks for.\n",
-}
+INTENT = """\
+# The intent of the study: the only content fixed in advance. Frozen into each run.
+# Findings are expected to depend on it: a different question should give a different structure.
+research_question: >
+  What is the question the analysis should answer?
+method: gioia
+stance: >
+  Who is asking, from which perspective or discipline, and what do they already assume?
+sensitizing_concepts: >
+  Concepts that orient attention without fixing what will be found (optional).
+study_context: >
+  Setting, informants, sampling, how the interviews were done.
+"""
 
 
 class Project:
@@ -43,19 +64,21 @@ class Project:
         if not (self.root / CONFIG).exists():
             raise QlsError(f"No {CONFIG} in {self.root}. Run `qls init`.")
         self.config = tomllib.loads((self.root / CONFIG).read_text(encoding="utf-8"))
-        self._store: Store | None = None
+        self._ledger: Ledger | None = None
+        self._graph: Graph | None = None
 
     @classmethod
     def init(cls, root: str | Path, name: str | None = None) -> "Project":
         root = Path(root).resolve()
         root.mkdir(parents=True, exist_ok=True)
+        name = name or root.name
         if not (root / CONFIG).exists():
-            (root / CONFIG).write_text(DEFAULT_CONFIG.format(name=name or root.name), encoding="utf-8")
-        for d in ("context", "sources", "corpus/text", "reports", "exports"):
+            prefix = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")[:30] or "qls"
+            (root / CONFIG).write_text(DEFAULT_CONFIG.format(name=name, prefix=f"qls_{prefix}"), encoding="utf-8")
+        if not (root / "intent.yaml").exists():
+            (root / "intent.yaml").write_text(INTENT, encoding="utf-8")
+        for d in ("sources", "corpus/text", "reports"):
             (root / d).mkdir(parents=True, exist_ok=True)
-        for f, body in CONTEXT.items():
-            if not (root / "context" / f).exists():
-                (root / "context" / f).write_text(body, encoding="utf-8")
         return cls(root)
 
     @classmethod
@@ -67,24 +90,31 @@ class Project:
                 return cls(cand)
         raise QlsError(f"No {CONFIG} found in {p} or its parents. Run `qls init <folder>`.")
 
-    @property
-    def store(self) -> Store:
-        if self._store is None:
-            self._store = Store(self.root / "qls.db")
-        return self._store
-
     def cfg(self, section: str, key: str, default=None):
         return self.config.get(section, {}).get(key, default)
 
-    def context_files(self) -> dict[str, str]:
-        d = self.root / "context"
-        return {p.name: p.read_text(encoding="utf-8") for p in sorted(d.glob("*.md"))} if d.exists() else {}
+    @property
+    def ledger(self) -> Ledger:
+        if self._ledger is None:
+            self._ledger = Ledger(self.root / "qls.db")
+        return self._ledger
 
-    def context_text(self) -> str:
-        return "\n\n".join(f'<context file="{n}">\n{b.strip()}\n</context>' for n, b in self.context_files().items())
+    @property
+    def graph(self) -> Graph:
+        if self._graph is None:
+            self._graph = Graph(self.cfg("typedb", "address"), self.cfg("typedb", "user"), self.cfg("typedb", "password"),
+                                self.cfg("typedb", "tls"))
+        return self._graph
 
-    def context_hash(self) -> str:
-        return sha256_text(json.dumps(self.context_files(), sort_keys=True))
+    def db_name(self, run: str) -> str:
+        return f"{self.cfg('typedb', 'database_prefix', 'qls')}_{run}"
+
+    def method_of(self, run: dict) -> Method:
+        m = load_method(run["config"].get("method_path") or run["method"])
+        if m.hash != run["method_hash"]:
+            raise QlsError(f"Method {m.name!r} changed since run {run['id']} was created ({run['method_hash'][:19]} -> {m.hash[:19]}). "
+                           "Fork into a new run, or restore the method files.")
+        return m
 
     # -- ingestion --------------------------------------------------------------
 
@@ -112,9 +142,104 @@ class Project:
             shutil.copy2(path, dest)
         meta = {"participant": participant or sid, "file": f"sources/{path.name}", "file_sha256": sha256_bytes(raw),
                 "parser": parser, "speakers": doc["speakers"]}
-        version = self.store.add_source(sid, canonical, units, title or path.stem, meta)
+        version = self.ledger.add_source(sid, canonical, units, title or path.stem, meta)
         return {"id": sid, "version": version, "turns": len(doc["turns"]), "segments": len(doc["segments"]),
                 "speakers": doc["speakers"], "parser": parser}
+
+    # -- runs -------------------------------------------------------------------
+
+    def read_intent(self, path: str | Path | None = None, **overrides) -> dict:
+        p = Path(path) if path else self.root / "intent.yaml"
+        intent = yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else {}
+        norm = lambda d: {k: (" ".join(str(v).split()) if isinstance(v, str) else v) for k, v in (d or {}).items()}
+        template = norm(yaml.safe_load(INTENT))
+        # unedited placeholder text from the template is not part of the intent
+        intent = {k: v for k, v in norm(intent).items() if v and (k == "method" or v != template.get(k))}
+        intent.update({k: v for k, v in overrides.items() if v})
+        if not intent.get("research_question"):
+            raise QlsError(f"Write the research question in {p} (or pass --question) before creating a run.")
+        return intent
+
+    def new_run(self, run: str, method: str | None = None, intent: dict | None = None, sources: list[str] | None = None,
+                config: dict | None = None) -> dict:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", run):
+            raise QlsError("Run names: letters, digits, - and _, up to 40 characters.")
+        intent = intent or self.read_intent()
+        m = load_method(method or intent.get("method") or "gioia")
+        intent["method"] = m.name
+        config = dict(config or {})
+        if method and Path(method).is_dir():
+            config["method_path"] = str(Path(method).resolve())
+        pinned = {s["id"]: s["version"] for s in self.ledger.sources() if not sources or s["id"] in sources}
+        if not pinned:
+            raise QlsError("No sources. `qls ingest` the interviews first.")
+        config["sources"] = pinned
+        db = self.db_name(run)
+        self.graph.create(db, [core_schema(), m.schema])
+        try:
+            with self.ledger.lock():
+                self.ledger.create_run(run, m.name, m.hash, intent, config, db)
+                queries = setup_queries(intent, {sid: self.ledger.source(sid, v) for sid, v in pinned.items()})
+                self.graph.write(db, queries)
+                self.ledger.append(run, 1, "setup", "system", {"intent": intent, "sources": pinned}, {"ids": []}, queries,
+                                   "run created")
+        except Exception:
+            self.graph.drop(db)
+            raise
+        return {"run": run, "db": db, "method": m.name, "method_hash": m.hash, "sources": len(pinned)}
+
+    def fork(self, run: str, new: str, at: int | None = None, note: str = "") -> dict:
+        r = self.ledger.run(run)
+        at = at if at is not None else self.ledger.next_seq(run) - 1
+        db = self.db_name(new)
+        m = self.method_of(r)
+        self.graph.create(db, [core_schema(), m.schema])
+        try:
+            with self.ledger.lock():
+                self.ledger.create_run(new, r["method"], r["method_hash"], r["intent"], {**r["config"], "note": note}, db,
+                                       parent=run, fork_at=at)
+                n = self.ledger.copy_events(run, new, at)
+            self.replay_into(new, db)
+        except Exception:
+            self.graph.drop(db)
+            self.ledger.delete_run(new)
+            raise
+        return {"run": new, "parent": run, "fork_at": at, "events": n, "state": self.graph.state_hash(db)}
+
+    def replay_into(self, run: str, db: str) -> int:
+        evs = self.ledger.events(run)
+        for e in evs:
+            self.graph.write(db, e["queries"])
+        return len(evs)
+
+    def replay(self, run: str) -> dict:
+        """Rebuild the run from its log into a scratch database and compare with the live graph."""
+        r = self.ledger.run(run)
+        m = self.method_of(r)
+        scratch = f"{r['db']}__replay"
+        self.graph.drop(scratch)
+        self.graph.create(scratch, [core_schema(), m.schema])
+        try:
+            n = self.replay_into(run, scratch)
+            a, b = self.graph.state_hash(r["db"]), self.graph.state_hash(scratch)
+        finally:
+            self.graph.drop(scratch)
+        return {"run": run, "events": n, "live": a, "replayed": b, "identical": a == b}
+
+    def drop_run(self, run: str) -> None:
+        r = self.ledger.run(run)
+        self.graph.drop(r["db"])
+        self.ledger.delete_run(run)
+
+
+def setup_queries(intent: dict, sources: dict[str, dict]) -> list[str]:
+    attrs = {"research_question": "research-question", "method": "method-name", "stance": "stance",
+             "sensitizing_concepts": "sensitizing", "study_context": "description"}
+    has = "".join(f", has {a} {lit(intent[k])}" for k, a in attrs.items() if intent.get(k))
+    qs = [f'insert $i isa intent, has id "intent"{has};']
+    for sid, s in sources.items():
+        qs.append(f"insert $s isa source, has id {lit(sid)}, has label {lit(s['title'] or sid)}, has version {s['version']};")
+    return qs
 
 
 def canonical_text(doc: dict) -> tuple[str, list[dict]]:
@@ -143,3 +268,6 @@ def canonical_text(doc: dict) -> tuple[str, list[dict]]:
                       "question_turn": s.get("question_turn"), "question_gap": s.get("question_gap", 0),
                       "section": s.get("section")})
     return text, units
+
+
+__all__ = ["Project", "canonical_text", "now"]
