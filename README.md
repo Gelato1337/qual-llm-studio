@@ -1,3 +1,9 @@
+> **Branch `claude/typedb-mcp`: separate design branch, work in progress.**
+> The design is in [docs/pipeline.md](docs/pipeline.md) and the TypeDB ontology in [schema/](schema/).
+> The MCP server on TypeDB is not written yet. The code below this note is the
+> `claude/executable-protocol` implementation (SQLite store) that this branch starts from.
+> See [BRANCHES.md](BRANCHES.md) for which branch to use for what.
+
 # Qual LLM Studio
 
 Executable qualitative methods: **strict store, free agents.**

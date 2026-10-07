@@ -152,6 +152,79 @@ From `claude/executable-protocol`: ingestion and segmentation (`qls/ingest.py`),
 becomes a TypeQL schema plus a method document, and the per-step task prompts give way to one
 method document the agent reads.
 
+## Intent: findings should depend on the question
+
+The only predefined content is the **intent**: the research question, the method, sensitising
+concepts and the researcher's stance. Human research varies a lot with intent, and so should this
+tool. A method that returns the same findings whatever question and method it is given is not robust;
+it is deaf, most likely returning the model's default summary of what is salient in the data.
+
+Robustness is therefore conditional:
+
+- **same intent → similar findings** (reliability: model, seed, order and scholar should matter little);
+- **different intent → different findings** (sensitivity, a form of validity);
+- **any intent → grounded findings** (verified quotes and reasons separate "another angle" from invention).
+
+Measured as a variance decomposition (G-theory) over the facets intent (question × method), model,
+replicate and scholar: a working method shows large intent variance and small variance from the rest.
+
+Controls:
+
+1. **Paraphrased question**: same intent, different wording → findings should *not* change.
+2. **Leading question** (presupposes what the data does not show) → few concepts, residuals and memos
+   saying the premise is not supported, not confirmation.
+3. **Irrelevant question** (the data cannot answer it) → close to empty, with an honest memo.
+4. **Other method, same question** (Gioia vs reflexive thematic analysis) → different structure and
+   abstraction, not just different labels.
+
+Prediction for Gioia: intent matters more as abstraction rises. Quotes and 1st-order concepts vary
+mostly in *which* passages are selected; themes vary more; aggregate dimensions, built to answer the
+question, vary most. Segment-level comparison measures selection and structure separately, per level.
+
+Design consequences:
+
+- `intent` is a first-class object; every run is bound to exactly one. Dimensions (probably themes)
+  must link to the question they answer, with a reason.
+- The codebook belongs to an intent, not to the corpus.
+- Sources and verified quotes are shared across intents; interpretation is not.
+- Runs under different intents must not see each other's memos or codebook (contamination).
+
+First experiment on the 17 interviews: 2 questions × 2 methods × 3–5 replicates, plus the controls.
+A human baseline is needed for same-intent spread too (the original coding plus one independent coder).
+
+## Operational ontology (the Palantir pattern)
+
+Palantir's Foundry Ontology is operational: it models what may be *done* to the data, not only what
+the data is. It maps onto this design:
+
+| Foundry | Here |
+|---|---|
+| object types, properties, link types (semantic layer) | the TypeDB schema |
+| interfaces | abstract `code` / `category` |
+| **action types** with parameters, submission criteria, validation, logging (kinetic layer) | the MCP tools |
+| action log | the event log = decision record |
+| functions | context packs, checks |
+| scenarios | forks |
+| permissions on actions | agents propose; only humans approve |
+
+What to take: make actions first-class and declarative. A method becomes three files: a TypeQL
+schema (nouns), an action file (verbs, who may use them, required reasons), and a method document
+(how to think). The MCP server generates its tools from the action file, so the decision log is
+complete by construction and a new method needs no server code:
+
+```yaml
+group_concepts:
+  actors: [agent, human]
+  params: {label: str, definition: str, concepts: [{id: concept, reason: str}]}
+  creates: theme
+approve_codebook_entry:
+  actors: [human]
+```
+
+What not to take: predefined content (Gioia is inductive; the schema fixes only the method's types,
+never what "legacy" means or which themes exist); the heavy platform; treating objects as facts
+(every interpretive object is someone's claim, with its provenance).
+
 ## Open questions
 
 1. Run TypeDB per project (simple) or one shared server with a database per run (needed for forks)?
