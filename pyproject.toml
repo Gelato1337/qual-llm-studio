@@ -5,12 +5,13 @@ build-backend = "hatchling.build"
 [project]
 name = "qual-llm-studio"
 version = "0.1.0"
-description = "Tools for reproducible, visible LLM-assisted qualitative analysis, with the Gioia method as the reference playbook."
+description = "Executable qualitative methods: recipes, a strict evidence store, and free agents behind an MCP server."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
     "rapidfuzz>=3.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

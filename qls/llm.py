@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from .project import QlsError
+from .util import QlsError
 
 
 class LLMError(QlsError):

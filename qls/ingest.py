@@ -12,13 +12,11 @@ used to flag concepts that only echo the interview guide (AMCIS challenge #2).
 
 from __future__ import annotations
 
-import json
 import re
-import shutil
 from collections import Counter
 from pathlib import Path
 
-from .project import Project, QlsError, now, sha256_bytes
+from .util import QlsError, now, sha256_bytes
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".srt", ".vtt"}
 INTERVIEWER_HINT = re.compile(r"interview|haastattel|moderator|researcher|tutkija|fasilit", re.I)
@@ -281,43 +279,3 @@ def build_document(doc_id: str, text: str, interviewer_labels: list[str], max_se
 def safe_id(stem: str) -> str:
     s = re.sub(r"[^A-Za-z0-9_-]+", "-", stem).strip("-") or "doc"
     return s[:48]
-
-
-def ingest_file(project: Project, path: str | Path, doc_id: str | None = None,
-                participant: str | None = None, interviewer: list[str] | None = None, replace: bool = False) -> dict:
-    path = Path(path)
-    if not path.exists():
-        raise QlsError(f"File not found: {path}")
-    doc_id = safe_id(doc_id or path.stem)
-    if doc_id in project.doc_ids() and not replace:
-        raise QlsError(f"Document {doc_id!r} already ingested. Use --id for another name, or --replace to re-parse.")
-    raw = path.read_bytes()
-    # The extracted text is kept next to the corpus: it is what every span refers back to,
-    # and re-parsing (e.g. after a parser fix) does not need another conversion.
-    cache = project.root / "corpus" / "text" / f"{doc_id}.md"
-    meta = cache.with_suffix(".json")
-    if cache.exists() and meta.exists() and json.loads(meta.read_text())["source_sha256"] == sha256_bytes(raw):
-        text, parser = cache.read_text(encoding="utf-8"), json.loads(meta.read_text())["parser"]
-    else:
-        text, parser = read_text(path)
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(text, encoding="utf-8")
-        meta.write_text(json.dumps({"source_sha256": sha256_bytes(raw), "parser": parser}))
-    labels = list(project.cfg("transcripts", "interviewer_labels", [])) + list(interviewer or [])
-    body = build_document(doc_id, text, labels, int(project.cfg("transcripts", "max_segment_chars", 2000)))
-    if not body["segments"]:
-        raise QlsError(f"{path.name}: no informant text found. Check the speaker labels (--interviewer).")
-    dest = project.root / "sources" / path.name
-    if dest.resolve() != path.resolve():
-        shutil.copy2(path, dest)
-    doc = {
-        "id": doc_id,
-        "participant": participant or doc_id,
-        "source": f"sources/{path.name}",
-        "source_sha256": sha256_bytes(raw),
-        "parser": parser,
-        "ingested": now(),
-        **body,
-    }
-    project.save_doc(doc)
-    return doc

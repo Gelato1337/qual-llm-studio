@@ -1,0 +1,117 @@
+name: gioia
+version: "1"
+description: >
+  Gioia methodology (Gioia, Corley & Hamilton 2013): informant-centric 1st-order concepts,
+  researcher-centric 2nd-order themes, aggregate dimensions, and a data structure in which every
+  element can be traced to quotes.
+
+memo_kinds: [meaning, informant, surprise, uncertainty, method, negative_case, summary]
+
+quote:
+  threshold: 90          # minimum fuzzy match score (0-100) for a quote to be accepted
+  roles: [informant]     # quotes may only come from informant turns, never the interviewer
+
+types:
+  Concept:
+    prefix: C
+    description: >
+      1st-order concept. States what an informant says, in their terms, close to their words.
+    fields:
+      in_vivo: {required: true, description: "label in the informant's own words"}
+      description: {required: true, description: "one or two sentences: the point, and why or when if they say it"}
+      canonical: {description: "canonical code from the term bank, for comparing across interviews and agents"}
+    links:
+      evidenced_by: {to: Quote, min: 1, reason: required,
+                     description: "quotes that show the concept; the reason says why this quote shows it"}
+      same_as: {to: Concept, reason: required, description: "the same point made in another interview"}
+      contradicts: {to: Quote, reason: required, description: "data that speaks against the concept"}
+
+  Theme:
+    prefix: T
+    description: >
+      2nd-order theme. Names what is going on across concepts; may be more abstract, but must say
+      something specific about this data.
+    fields:
+      label: {required: true}
+      definition: {required: true, description: "what belongs in the theme and what does not"}
+    links:
+      groups: {to: Concept, min: 2, reason: required, exclusive: true,
+               description: "concepts in the theme; the reason says why each belongs"}
+      contradicts: {to: Quote, reason: required, description: "negative cases found in the data"}
+
+  Dimension:
+    prefix: D
+    description: Aggregate dimension grouping themes at the highest level.
+    fields:
+      label: {required: true}
+      definition: {required: true}
+    links:
+      groups: {to: Theme, min: 1, reason: required, exclusive: true}
+
+expectations:
+  # Soft rules: reported by `check`, required before a step's checkpoint is approved.
+  - {id: interview_memo, text: "every source has an interview memo", each: Source, needs_memo_level: interview}
+  - {id: negative_case, text: "every theme records a search for negative cases (a contradicts link or a negative_case memo)",
+     each: Theme, needs_any: [{link: contradicts}, {memo_kind: negative_case}]}
+  - {id: themes_placed, text: "every theme belongs to a dimension", each: Theme, needs_incoming: {rel: groups, from: Dimension}}
+  - {id: concepts_placed, text: "every concept belongs to a theme (or has an uncertainty memo saying why not)",
+     each: Concept, needs_any: [{incoming: {rel: groups, from: Theme}}, {memo_kind: uncertainty}]}
+
+steps:
+  - id: calibrate
+    title: Calibration on two or three interviews
+    produces: [Quote, Concept, Memo]
+    checkpoint: true
+    instructions: |
+      Code two or three interviews as in step "code", then call checkpoint() with a short summary and
+      your questions. Do not continue until the researcher has reviewed: their edits become the worked
+      examples for the rest of the run.
+
+  - id: code
+    title: 1st-order coding, one interview at a time
+    produces: [Quote, Concept, Memo]
+    instructions: |
+      For each interview:
+      1. read_source() it in full.
+      2. For every point that bears on the research question, add_quote() the informant's words, then
+         add_object("Concept") with an in_vivo label in their words, a description, and evidenced_by
+         links whose reason says why each quote shows the concept.
+      3. Write meaning memos for concepts whose sense depends on context ("what it means here, what it
+         does not mean"), and uncertainty memos where you are unsure.
+      4. Finish with the interview memo (update_memo level=interview, about the source): who the
+         informant is, their stance, their main points, what surprised you. About one page.
+      Never code what only the interviewer said. Never paraphrase inside a quote.
+
+  - id: link
+    title: Link the same point across interviews
+    produces: [Concept, Memo]
+    instructions: |
+      Using the interview memos and search(), connect concepts that make the same point in different
+      interviews with same_as links (reason required). Give them a shared canonical code. Do not merge
+      concepts that only share a topic; the in_vivo labels stay as the informants said them.
+
+  - id: themes
+    title: 2nd-order themes
+    produces: [Theme, Memo]
+    checkpoint: true
+    instructions: |
+      Group concepts into themes (add_object "Theme", groups links with a reason per concept). Work from
+      meaning: get() and neighbors() the concepts, read their memos and quotes; return to the source when
+      a label is not enough. For every theme, search the data for negative cases and record them
+      (contradicts links, or a negative_case memo saying none were found and how you searched).
+
+  - id: dimensions
+    title: Aggregate dimensions
+    produces: [Dimension, Memo]
+    instructions: |
+      Group themes into dimensions. Before placing a theme, look at the concepts and quotes under it,
+      not only its label. Each dimension needs a definition.
+
+  - id: synthesis
+    title: Corpus memo and checkpoint
+    produces: [Memo]
+    checkpoint: true
+    instructions: |
+      Write the corpus memo (update_memo level=corpus) citing interview memos: the data structure in
+      brief, the groupings you are least sure about, and the strongest alternative reading of the data.
+      Run check(), fix what it reports, then checkpoint().
