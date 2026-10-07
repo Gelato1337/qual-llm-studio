@@ -193,3 +193,27 @@ def test_cli_agent_prompt(p, capsys):
 
     main(["agent", "prompt", "r1", "--actor", "agent:a", "--step", "code", "--project", str(p.root)])
     assert "Step `code`" in capsys.readouterr().out
+
+
+def test_report_and_diff(p, s):
+    from qls.report import build, diff, to_html, to_markdown
+
+    q1 = s.add_quote("P01", "Legacy systems.")["id"]
+    q2 = s.add_quote("P03", "Vanhat järjestelmät ovat iso ongelma.")["id"]
+    q3 = s.add_quote("P02", "Finding senior people.")["id"]
+    c1, c2, c3 = (concept(s, l, [q])["id"] for l, q in (("legacy", q1), ("vanhat", q2), ("seniors", q3)))
+    t = s.add_object("Theme", {"label": "Old systems", "definition": "kept alive"},
+                     [{"rel": "groups", "to": c1, "reason": "old"}, {"rel": "groups", "to": c2, "reason": "old"}])["id"]
+    s.add_object("Dimension", {"label": "Inertia", "definition": "d"}, [{"rel": "groups", "to": t, "reason": "r"}])
+    s.add_memo([c3], "uncertainty", "Is scarcity a theme of its own?")
+    rep = build(p.store, "r1")
+    assert rep["levels"] == ["Dimension", "Theme", "Concept"]
+    assert rep["tree"][0]["children"][0]["children"][0]["quotes"][0]["text"] == "Legacy systems."
+    assert [n["id"] for n in rep["unplaced"]["Concept"]] == [c3]
+    md = to_markdown(rep)
+    assert "| Concept | Theme | Dimension |" in md and "“Legacy systems.”" in md and "Is scarcity" in md
+    assert "Vanhat järjestelmät" in to_html(rep)
+    p.store.create_run("alt", "gioia", p.store.run("r1")["recipe_hash"], {}, parent="r1")
+    Session(p.store, "alt", "agent:b").update(t, {"label": "Legacy"}, "shorter")
+    d = diff(p.store, "r1", "alt")
+    assert d["related"] and d["changed"][0]["id"] == t and not d["only_a"]

@@ -12,6 +12,8 @@ Researcher / experimenter:
     qls respond RUN --approve | --reject ID --reason R | --edit ID --set k=v --reason R | --answer TEXT
     qls resume RUN
     qls compare RUN_A RUN_B
+    qls report RUN [--format md|html] [-o FILE]   data structure, claim -> quote table, decisions
+    qls diff RUN_A RUN_B              objects and links that differ, plus agreement
     qls recipes | recipe NAME | guide
     qls mcp --run RUN --actor agent:NAME       MCP server for a harness
     qls agent prompt RUN --actor agent:NAME [--step code] [--sources P01 P02] [--transport mcp|shell]
@@ -271,6 +273,24 @@ def cmd_agent_pi(a):
     _out(info)
 
 
+def cmd_report(a):
+    from .report import build, to_html, to_markdown
+
+    rep = build(_p(a).store, a.run)
+    txt = to_html(rep) if a.format == "html" else to_markdown(rep)
+    if a.output:
+        Path(a.output).write_text(txt, encoding="utf-8")
+        print(f"wrote {a.output}")
+    else:
+        print(txt)
+
+
+def cmd_diff(a):
+    from .report import diff
+
+    _out(diff(_p(a).store, a.a, a.b))
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--project", help="project folder (default: search upwards or $QLS_PROJECT)")
@@ -335,6 +355,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("args", nargs="?")
     sp.add_argument("--actor")
     sp = add("compare", cmd_compare, help="structural agreement between two runs")
+    sp.add_argument("a")
+    sp.add_argument("b")
+    sp = add("report", cmd_report, help="readable report of a run")
+    sp.add_argument("run")
+    sp.add_argument("--format", choices=["md", "html"], default="md")
+    sp.add_argument("-o", "--output")
+    sp = add("diff", cmd_diff, help="what differs between two runs")
     sp.add_argument("a")
     sp.add_argument("b")
     add("recipes", cmd_recipes, help="list built-in recipes")
