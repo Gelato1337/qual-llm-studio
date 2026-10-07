@@ -15,7 +15,6 @@ import html
 from collections import Counter
 
 from .analysis import compare
-from .recipe import load_recipe
 from .store import Store
 from .tools import Session
 
@@ -52,7 +51,8 @@ def _quote(store: Store, q: dict, cache: dict) -> dict:
 
 def build(store: Store, run: str) -> dict:
     r = store.run(run)
-    recipe = load_recipe(r["recipe"])
+    session = Session(store, run, "reviewer:report")
+    recipe = session.recipe
     levels = hierarchy(recipe)
     objs = {o["id"]: o for o in store.objects(run)}
     cache: dict = {}
@@ -88,7 +88,7 @@ def build(store: Store, run: str) -> dict:
         "fork_at": r["fork_at"], "config": r["config"], "state_hash": store.state_hash(run), "levels": levels,
         "counts": dict(Counter(o["type"] for o in objs.values())), "events": len(events), "actors": dict(Counter(e["actor"] for e in events)),
         "tree": tree, "unplaced": unplaced, "decisions": decisions, "sessions": sessions, "memos": memos,
-        "open": Session(store, run, "reviewer:report").check(),
+        "open": session.check(),
     }
 
 
@@ -170,9 +170,9 @@ CSS = """
 @media (prefers-color-scheme:dark){:root{--bg:#141416;--fg:#ececf0;--mut:#9a9aa2;--line:#33333a;--c1:#1b2433;--c2:#231d33;--c3:#33281b}}
 body{background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif;max-width:1200px;margin:0 auto;padding:16px}
 h1,h2{font-weight:600}.mut{color:var(--mut)}table{border-collapse:collapse;width:100%}td,th{border-top:1px solid var(--line);padding:6px;vertical-align:top;text-align:left}
-.ds{display:grid;gap:8px}.row{display:grid;grid-template-columns:1fr 1fr 1.4fr;gap:8px;border-top:1px solid var(--line);padding-top:8px}
+.ds{display:grid;gap:8px}.row{display:grid;grid-template-columns:2.4fr 1fr;gap:8px;border-top:1px solid var(--line);padding-top:8px}
 .box{border-radius:8px;padding:8px}.l0{background:var(--c3)}.l1{background:var(--c2)}.l2{background:var(--c1)}
-.sub{display:grid;gap:8px}.pair{display:grid;grid-template-columns:1fr 1.4fr;gap:8px}
+.sub{display:grid;gap:8px}.pair{display:grid;grid-template-columns:1.4fr 1fr;gap:8px}
 details summary{cursor:pointer}blockquote{margin:4px 0 4px 8px;padding-left:8px;border-left:3px solid var(--line)}
 @media (max-width:700px){.row,.pair{grid-template-columns:1fr}}
 """
@@ -188,16 +188,18 @@ def to_html(rep: dict) -> str:
 
     def mid(n):
         kids = "".join(leaf(c) for c in n.get("children", []))
-        return f"<div class=pair><div class='box l1'><b>{e(n['id'])}</b> {e(n['label'])}<div class=mut>{e(str(n['fields'].get('definition', '')))}</div></div><div class=sub>{kids}</div></div>"
+        return f"<div class=pair><div class=sub>{kids}</div><div class='box l1'><b>{e(n['id'])}</b> {e(n['label'])}<div class=mut>{e(str(n['fields'].get('definition', '')))}</div></div></div>"
 
     rows = []
     if len(rep["levels"]) == 3:
         for d in rep["tree"]:
-            rows.append(f"<div class=row style='grid-template-columns:1fr 2.4fr'><div class='box l0'><b>{e(d['id'])}</b> {e(d['label'])}</div><div class=sub>{''.join(mid(t) for t in d['children'])}</div></div>")
+            rows.append(f"<div class=row><div class=sub>{''.join(mid(t) for t in d['children'])}</div><div class='box l0'><b>{e(d['id'])}</b> {e(d['label'])}</div></div>")
+        for t in rep["unplaced"].get(rep["levels"][1], []):
+            rows.append(f"<div class=row><div class=sub>{mid(t)}</div><div class='box mut'>(no {e(rep['levels'][0].lower())} yet)</div></div>")
     body = [f"<h1>Run {e(rep['run'])}</h1>", md_head]
     if rows:
         heads = " · ".join(reversed(rep["levels"]))
-        body += [f"<h2>Data structure</h2><p class=mut>{e(heads)}, read right to left; open a concept to see its quotes.</p><div class=ds>{''.join(rows)}</div>"]
+        body += [f"<h2>Data structure</h2><p class=mut>{e(heads)}, left to right; open a concept to see its quotes.</p><div class=ds>{''.join(rows)}</div>"]
         for t, nodes in rep["unplaced"].items():
             body.append(f"<p class=mut>Not yet placed ({e(t)}): {e(', '.join(n['id'] + ' ' + n['label'] for n in nodes))}</p>")
     body.append("<h2>Memos</h2><ul>" + "".join(f"<li><b>{e(m['id'])}</b> <span class=mut>{e(str(m['fields'].get('kind') or m['fields'].get('level')))} · {e(', '.join(m['about']))}</span><br>{e(str(m['fields'].get('text', '')))}</li>" for m in rep["memos"]) + "</ul>")
