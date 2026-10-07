@@ -36,7 +36,7 @@ def test_interviewer_found_by_questions_when_unlabelled_role():
 
 
 def test_long_turn_is_split():
-    long = "I: Q?\nR: " + " ".join(f"Sentence number {i} is here." for i in range(200))
+    long = "I: Q?\nR: ok.\nI: More?\nR: " + " ".join(f"Sentence number {i} is here." for i in range(200))
     doc = build_document("x", long, ["I"], 500)
     assert len(doc["segments"]) > 3
     assert all(len(s["text"]) <= 520 for s in doc["segments"])
@@ -56,3 +56,56 @@ def test_ground_falls_back_to_other_segment():
     segs = [{"id": "d:s001", "text": "alpha beta gamma"}, {"id": "d:s002", "text": "the vendor lock-in worries us"}]
     seg, sp = ground("vendor lock-in worries us", "d:s001", segs)
     assert seg["id"] == "d:s002" and sp.score == 100
+
+
+DOCLING_LIKE = """<!-- image -->
+
+## Oral History of Someone
+
+William Aspray: Today is Friday and I am interviewing Kapor.
+
+## Background and Education
+
+Aspray: Tell me about your education.
+
+## Kapor: Well, so where to start?
+
+## Aspray:
+
+## Education.
+
+Kapor:
+
+I studied psychology and then taught meditation.
+
+## Aspray: What did your father do?
+
+## Kapor:
+
+He was in business, small manufacturing.
+"""
+
+
+def test_converter_markdown_labels_sections_and_full_names():
+    doc = build_document("k", DOCLING_LIKE, [], 2000)
+    assert doc["speakers"] == {"Aspray": "interviewer", "Kapor": "informant"}
+    texts = [s["text"] for s in doc["segments"]]
+    assert texts == ["Well, so where to start?", "I studied psychology and then taught meditation.",
+                     "He was in business, small manufacturing."]
+    assert not any("father" in t for t in texts)  # interviewer questions never leak into informant text
+    assert doc["segments"][2]["question"] == "What did your father do?"
+    assert doc["segments"][0]["section"] == "Background and Education"
+    assert doc["segments"][1]["section"] == "Education."
+    assert doc["turns"][0]["role"] == "meta"
+    assert any(t["speaker"] == "section" for t in doc["turns"])
+    first_q = [t for t in doc["turns"] if t["role"] == "interviewer"][0]
+    assert first_q["text"].startswith("Today is Friday")  # "William Aspray:" resolved to Aspray
+
+
+def test_page_break_inside_sentence_is_not_a_segment_boundary():
+    long = "I: Why?\nR: Fine.\nI: Go on?\nR: " + "First part of a long answer. " * 40 + "I had to leave school because I knew I\n\nwasn't done. " + "More text here. " * 40
+    doc = build_document("x", long, ["I"], 800)
+    assert any("because I knew I\n\nwasn't done." in s["text"] for s in doc["segments"])  # kept together
+    turn = next(t for t in doc["turns"] if t["text"].startswith("First part"))
+    assert all(s["text"] in turn["text"] for s in doc["segments"][1:])  # segments are exact slices
+    assert [s["question_gap"] for s in doc["segments"]] == [0] + list(range(len(doc["segments"]) - 1))

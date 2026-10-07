@@ -12,6 +12,7 @@ used to flag concepts that only echo the interview guide (AMCIS challenge #2).
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from collections import Counter
@@ -62,6 +63,13 @@ def _strip_subtitles(raw: str) -> str:
 
 
 def _docling_text(path: Path) -> str:
+    import logging
+    import os
+
+    for name in ("docling", "docling_core", "rapidocr", "RapidOCR", "transformers"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+    os.environ.setdefault("TQDM_DISABLE", "1")
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
     try:
         from docling.datamodel.base_models import InputFormat
         from docling.document_converter import AudioFormatOption, DocumentConverter
@@ -92,18 +100,67 @@ def _docling_text(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
+SECTION = "__section__"
+_HEADING = re.compile(r"^\s*#{1,6}\s+(.*)$")
+_LABEL_ONLY = re.compile(
+    r"^\s*(?:\*\*|__)?(?P<label>[A-ZÅÄÖ][\wÅÄÖåäö.\-]*(?: [\wÅÄÖåäö.\-]+){0,3}|[A-Za-z]\d{0,3})(?:\*\*|__)?\s*[:：](?:\*\*|__)?\s*$"
+)
+_NOISE = re.compile(r"^\s*<!--.*?-->\s*$")
+
+
+def _clean_lines(text: str) -> list[tuple[str, bool]]:
+    """(line, was_heading). Markdown heading marks are removed: document converters
+    sometimes render speaker labels or section titles as headings."""
+    out = []
+    for ln in text.splitlines():
+        if _NOISE.match(ln):
+            continue
+        ln = _TIMESTAMP_PREFIX.sub("", ln).rstrip()
+        m = _HEADING.match(ln)
+        out.append((m.group(1).strip(), True) if m else (ln, False))
+    return out
+
+
 def parse_turns(text: str) -> list[tuple[str | None, str]]:
-    """Split text into (speaker, text) turns. speaker is None if unlabelled."""
-    lines = [_TIMESTAMP_PREFIX.sub("", ln).rstrip() for ln in text.splitlines()]
-    candidates = Counter(m.group("label").strip() for ln in lines if (m := _SPEAKER.match(ln)))
+    """Split text into (speaker, text) turns.
+
+    speaker is None for unlabelled text and SECTION for section titles (headings
+    that are not speaker lines). Handles "Name: text", a label alone on its line
+    followed by the text, labels rendered as Markdown headings, and a full name
+    used once ("Thomas Haigh:") for a speaker otherwise labelled by surname.
+    """
+    lines = _clean_lines(text)
+
+    def label_of(ln: str) -> tuple[str | None, str | None]:
+        m = _SPEAKER.match(ln)
+        if m:
+            return m.group("label").strip(), m.group("text").strip()
+        m = _LABEL_ONLY.match(ln)
+        if m:
+            return m.group("label").strip(), ""
+        return None, None
+
+    candidates = Counter(lab for ln, _ in lines if (lab := label_of(ln)[0]))
     # A label must recur to count as a speaker; "Note: ..." once is just prose.
     speakers = {lab for lab, n in candidates.items() if n >= 2}
 
+    def resolve(lab: str | None) -> str | None:
+        if lab is None:
+            return None
+        if lab in speakers:
+            return lab
+        last = lab.split()[-1] if " " in lab else None
+        return last if last in speakers else None
+
     turns: list[list] = []
-    for ln in lines:
-        m = _SPEAKER.match(ln)
-        if m and m.group("label").strip() in speakers:
-            turns.append([m.group("label").strip(), [m.group("text").strip()]])
+    for ln, heading in lines:
+        lab, rest = label_of(ln)
+        spk = resolve(lab)
+        if spk:
+            turns.append([spk, [rest] if rest else []])
+        elif heading and speakers and ln:
+            turns.append([SECTION, [ln]])
+            turns.append([turns[-2][0] if len(turns) > 1 else None, []])  # text after a title continues the speaker
         elif ln.strip():
             if not turns:
                 turns.append([None, []])
@@ -114,62 +171,96 @@ def parse_turns(text: str) -> list[tuple[str | None, str]]:
     for spk, parts in turns:
         body = "\n".join(parts).strip()
         body = re.sub(r"\n{2,}", "\n\n", body)
-        if body:
+        if not body:
+            continue
+        if out and spk == out[-1][0] and spk not in (SECTION, None):
+            out[-1] = (spk, out[-1][1] + "\n\n" + body)  # same speaker split by a title: one turn
+        else:
             out.append((spk, body))
     if not speakers:
         # No speaker labels: treat each paragraph as an informant turn.
-        paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+        paras: list[str] = []
+        for p in (p.strip() for p in re.split(r"\n\s*\n", "\n".join(ln for ln, _ in lines)) if p.strip()):
+            if paras and not re.search(_SENT_END + "$", paras[-1]):
+                paras[-1] += " " + p  # sentence cut by a page break
+            else:
+                paras.append(p)
         return [(None, p) for p in paras]
     return out
 
 
 def assign_roles(turns: list[tuple[str | None, str]], interviewer_labels: list[str]) -> dict[str, str]:
-    labels = [s for s, _ in turns if s]
+    labels = [s for s, _ in turns if s and s != SECTION]
     if not labels:
         return {}
     wanted = {x.lower() for x in interviewer_labels}
     roles = {s: ("interviewer" if s.lower() in wanted or INTERVIEWER_HINT.search(s) else "informant") for s in set(labels)}
     if "interviewer" not in roles.values() and len(roles) >= 2:
-        # Heuristic: the interviewer asks the most questions per turn.
-        def q_ratio(spk: str) -> float:
-            ts = [t for s, t in turns if s == spk]
-            return sum(t.rstrip().endswith("?") for t in ts) / max(len(ts), 1)
+        names = list(roles)
+        # 1. explicit: "... I am interviewing Kapor" / "interview with Kapor"
+        for spk, text in turns:
+            if spk not in roles:
+                continue
+            for other in names:
+                if other != spk and re.search(rf"\binterview(?:ing|ed)?\b[^.\n]{{0,80}}\b{re.escape(other)}\b", text, re.I):
+                    roles[spk] = "interviewer"
+                    return roles
 
-        roles[max(roles, key=q_ratio)] = "interviewer"
+        # 2. heuristic: the interviewer asks the most questions per turn, and usually speaks first
+        first = next((s for s, _ in turns if s in roles), None)
+
+        def score(spk: str) -> float:
+            ts = [t for s, t in turns if s == spk]
+            q_ratio = sum(t.rstrip().endswith("?") for t in ts) / max(len(ts), 1)
+            return q_ratio + (0.25 if spk == first else 0.0)
+
+        roles[max(roles, key=score)] = "interviewer"
     return roles
 
 
+_SENT_END = r"[.!?:;\"'”’)\]…]"
+
+
 def _split_long(text: str, max_chars: int) -> list[str]:
+    """Cut a long turn into segments that are exact slices of its text.
+
+    Prefers paragraph breaks that end a sentence, then sentence ends; never cuts at
+    a paragraph break inside a sentence (PDF page breaks), and only cuts mid-sentence
+    when a single sentence is longer than max_chars.
+    """
     if len(text) <= max_chars:
         return [text]
-    units = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
-    if len(units) == 1:
-        units = re.split(r"(?<=[.!?])\s+", text)
-    chunks, cur = [], ""
-    for u in units:
-        if cur and len(cur) + len(u) + 1 > max_chars:
-            chunks.append(cur.strip())
-            cur = ""
-        cur += ("\n\n" if "\n\n" in text else " ") + u if cur else u
-    if cur.strip():
-        chunks.append(cur.strip())
-    return chunks
+    para = [m.end() for m in re.finditer(r"\n\s*\n", text) if re.search(_SENT_END + r"\s*$", text[:m.start()])]
+    sent = [m.end() for m in re.finditer(r"(?<=[.!?])\s+", text)]
+    chunks, start = [], 0
+    while len(text) - start > max_chars:
+        limit = start + max_chars
+        cands = [p for p in para if start < p <= limit] or [p for p in sent if start < p <= limit]
+        cut = max(cands) if cands else limit
+        chunks.append(text[start:cut].strip())
+        start = cut
+    chunks.append(text[start:].strip())
+    return [c for c in chunks if c]
 
 
 def build_document(doc_id: str, text: str, interviewer_labels: list[str], max_segment_chars: int) -> dict:
     turns_raw = parse_turns(text)
     roles = assign_roles(turns_raw, interviewer_labels)
     turns, segments = [], []
-    last_q = None
+    last_q, section, gap = None, None, 0
     for i, (spk, body) in enumerate(turns_raw, start=1):
-        # Unlabelled text in a labelled transcript (title, preamble) is kept but never coded.
-        role = roles.get(spk, "informant") if spk else ("meta" if roles else "informant")
+        # Unlabelled text in a labelled transcript (title, preamble) and section titles
+        # are kept but never coded; the current section is remembered on each segment.
+        if spk == SECTION:
+            role, section = "meta", body
+        else:
+            role = roles.get(spk, "informant") if spk else ("meta" if roles else "informant")
         tid = f"{doc_id}:t{i:03d}"
-        turns.append({"id": tid, "speaker": spk or role, "role": role, "text": body})
+        turns.append({"id": tid, "speaker": "section" if spk == SECTION else (spk or role), "role": role, "text": body})
         if role == "meta":
             continue
         if role == "interviewer":
-            last_q = {"turn": tid, "text": body}
+            last_q, gap = {"turn": tid, "text": body}, 0
             continue
         for chunk in _split_long(body, max_segment_chars):
             segments.append({
@@ -179,7 +270,11 @@ def build_document(doc_id: str, text: str, interviewer_labels: list[str], max_se
                 "text": chunk,
                 "question": last_q["text"] if last_q else None,
                 "question_turn": last_q["turn"] if last_q else None,
+                # 0 = directly answers the question; n = n informant segments after it
+                "question_gap": gap,
+                "section": section,
             })
+            gap += 1
     return {"speakers": roles, "turns": turns, "segments": segments}
 
 
@@ -189,15 +284,25 @@ def safe_id(stem: str) -> str:
 
 
 def ingest_file(project: Project, path: str | Path, doc_id: str | None = None,
-                participant: str | None = None, interviewer: list[str] | None = None) -> dict:
+                participant: str | None = None, interviewer: list[str] | None = None, replace: bool = False) -> dict:
     path = Path(path)
     if not path.exists():
         raise QlsError(f"File not found: {path}")
     doc_id = safe_id(doc_id or path.stem)
-    if doc_id in project.doc_ids():
-        raise QlsError(f"Document {doc_id!r} already ingested. Use --id to give it another name.")
+    if doc_id in project.doc_ids() and not replace:
+        raise QlsError(f"Document {doc_id!r} already ingested. Use --id for another name, or --replace to re-parse.")
     raw = path.read_bytes()
-    text, parser = read_text(path)
+    # The extracted text is kept next to the corpus: it is what every span refers back to,
+    # and re-parsing (e.g. after a parser fix) does not need another conversion.
+    cache = project.root / "corpus" / "text" / f"{doc_id}.md"
+    meta = cache.with_suffix(".json")
+    if cache.exists() and meta.exists() and json.loads(meta.read_text())["source_sha256"] == sha256_bytes(raw):
+        text, parser = cache.read_text(encoding="utf-8"), json.loads(meta.read_text())["parser"]
+    else:
+        text, parser = read_text(path)
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(text, encoding="utf-8")
+        meta.write_text(json.dumps({"source_sha256": sha256_bytes(raw), "parser": parser}))
     labels = list(project.cfg("transcripts", "interviewer_labels", [])) + list(interviewer or [])
     body = build_document(doc_id, text, labels, int(project.cfg("transcripts", "max_segment_chars", 2000)))
     if not body["segments"]:

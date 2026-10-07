@@ -12,7 +12,7 @@ Later stages see only your labels, descriptions and quotes, not the full intervi
 
 ## The transcript
 
-Each `<segment>` is an informant's answer. Its `question` attribute shows the interviewer question it follows; it is context only. A concept must be something the informant actually asserts. Topics that appear only because the interviewer raised them, or bare agreement ("yes", "sure"), are not concepts; the interview guide must not leak into the coding.
+Each `<segment>` is an informant's answer. Its `question` attribute shows the interviewer question it follows; it is context only. When `question_asked` says the question came several segments earlier, the informant has moved on in a long answer and the question may no longer describe the topic. A concept must be something the informant actually asserts. Topics that appear only because the interviewer raised them, or bare agreement ("yes", "sure"), are not concepts; the interview guide must not leak into the coding.
 
 ## Rules
 

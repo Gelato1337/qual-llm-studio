@@ -53,6 +53,12 @@ def informant_language(state: dict, cid: str) -> float | None:
     return round(sum(1 for w in words if w in text) / len(words), 2)
 
 
+def question_tag(seg: dict) -> str:
+    """How to introduce the interviewer question a segment follows."""
+    gap = seg.get("question_gap", 0) or 0
+    return "Q" if gap == 0 else f"earlier Q, {gap} segment{'s' if gap > 1 else ''} before"
+
+
 def quote_view(project: Project, state: dict, qid: str, context: bool = True) -> dict:
     q = state["quotes"][qid]
     out = {"id": qid, "doc": q["doc"], "segment": q["segment"], "text": q["text"], "score": q.get("score")}
@@ -60,6 +66,7 @@ def quote_view(project: Project, state: dict, qid: str, context: bool = True) ->
         try:
             seg = project.segment(q["segment"])
             out["question"] = seg.get("question")
+            out["question_tag"] = question_tag(seg)
         except QlsError:
             pass
     return out
@@ -310,7 +317,7 @@ def context_pack(project: Project, state: dict, refs: list[str], max_chars: int 
                     lines.append(f"  {mark} {t['speaker']} ({t['role']}): {t['text']}")
             else:
                 seg = project.segment(q["segment"])
-                qq = f"  [Q: {seg['question'][:200]}]" if seg.get("question") else ""
+                qq = f"  [{question_tag(seg)}: {seg['question'][:200]}]" if seg.get("question") else ""
                 lines.append(f"- {qid} {q['segment']}: \"{q['text']}\"{qq}")
         return lines
 
@@ -332,7 +339,7 @@ def context_pack(project: Project, state: dict, refs: list[str], max_chars: int 
                 parts.append(f"### theme {tid}: {t['label']}: {t['definition']}")
                 for cid in t["concepts"]:
                     c = state["concepts"][cid]
-                    m = c.get("memo", {}).get("meaning_here", "")
+                    m = "; ".join(x["meaning_here"] for x in concept_memos(state, cid) if x.get("meaning_here"))
                     parts.append(f"- {cid}: {c['label']}" + (f" (meaning here: {m})" if m else ""))
         elif ":" in ref:  # segment or turn
             seg_id = ref

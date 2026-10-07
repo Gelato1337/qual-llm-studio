@@ -27,7 +27,7 @@ from .llm import LLM, PendingAnswers, make_llm
 from .ops import Ops
 from .project import Project, QlsError, Run, sha256_text
 from .runs import fork
-from .views import _spread, active, concept_memos, context_pack, memos_about
+from .views import _spread, active, concept_memos, context_pack, memos_about, question_tag
 
 VIEWS = ("labels", "cards", "memos")
 
@@ -77,7 +77,7 @@ def concept_listing(project: Project, state: dict, view: str, quotes: int = 2) -
         for qid in _spread(state, c["quotes"], quotes):
             q = state["quotes"][qid]
             seg = project.segment(q["segment"])
-            qq = f" (asked: {seg['question'][:160]})" if seg.get("question") else ""
+            qq = f" ({question_tag(seg)}: {seg['question'][:160]})" if seg.get("question") else ""
             lines.append(f'quote{qq}: "{q["text"]}"')
         if view == "memos":
             for m in concept_memos(state, c["id"]):

@@ -140,7 +140,8 @@ def _content_words(s: str) -> set[str]:
 def _flags(label: str, segs: list[dict], quotes: list[dict]) -> list[str]:
     flags = []
     lw = _content_words(label)
-    qw = set().union(*[_content_words(s.get("question") or "") for s in segs]) if segs else set()
+    direct = [s for s in segs if not s.get("question_gap")]  # only questions the quote directly answers
+    qw = set().union(*[_content_words(s.get("question") or "") for s in direct]) if direct else set()
     if lw and qw and len(lw & qw) / len(lw) >= 0.6:
         flags.append("echoes_question")  # AMCIS challenge #2: guide contamination
     if all(len(q["text"].split()) < 8 for q in quotes):
@@ -152,6 +153,8 @@ def _transcript_block(doc: dict, segments: list[dict]) -> str:
     lines = [f'<transcript doc="{doc["id"]}" participant="{html.escape(str(doc.get("participant", "")))}">']
     for s in segments:
         q = f' question="{html.escape(s["question"][:400])}"' if s.get("question") else ""
+        if s.get("question") and s.get("question_gap"):
+            q += f' question_asked="{s["question_gap"]} segments earlier"'  # the answer has moved on since
         lines.append(f'<segment id="{s["id"]}"{q}>\n{s["text"]}\n</segment>')
     lines.append("</transcript>")
     return "\n".join(lines)

@@ -60,7 +60,7 @@ def cmd_ingest(a):
     if a.id and len(a.files) > 1:
         raise QlsError("--id only works with a single file")
     for f in a.files:
-        d = ingest_file(p, f, doc_id=a.id, participant=a.participant, interviewer=a.interviewer)
+        d = ingest_file(p, f, doc_id=a.id, participant=a.participant, interviewer=a.interviewer, replace=a.replace)
         roles = ", ".join(f"{k}={v}" for k, v in d["speakers"].items()) or "no speaker labels (whole text = informant)"
         print(f"{d['id']}: {len(d['turns'])} turns, {len(d['segments'])} informant segments [{roles}] via {d['parser']}")
 
@@ -212,7 +212,7 @@ def cmd_concepts(a):
                 print("    memo: " + "; ".join(f"{k}: {v}" for k, v in m.items() if k not in ("concept", "label")))
             for q in c["quotes"]:
                 if q.get("question"):
-                    print(f"    Q: {q['question'][:160]}")
+                    print(f"    {q.get('question_tag', 'Q')}: {q['question'][:160]}")
                 print(f"    > {q['text']}  ({q['id']}, {q['segment']})")
             print()
     print(f"({len(cards)} concepts)")
@@ -233,7 +233,7 @@ def cmd_concept_show(a):
     for m in card["memos"]:
         print(f"memo {m['id']} [{m['kind']}, {m['author']}]: {m['text']}")
     for q in card["quotes"]:
-        print(f"\n{q['id']} {q['segment']}" + (f"\n  Q: {q['question']}" if q.get("question") else ""))
+        print(f"\n{q['id']} {q['segment']}" + (f"\n  {q.get('question_tag', 'Q')}: {q['question']}" if q.get("question") else ""))
         print(f"  > {q['text']}")
 
 
@@ -540,6 +540,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--id")
     sp.add_argument("--participant")
     sp.add_argument("--interviewer", action="append", help="extra interviewer speaker label")
+    sp.add_argument("--replace", action="store_true", help="re-parse a document that is already ingested")
 
     add("docs", cmd_docs, help="list documents")
 

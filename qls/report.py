@@ -43,7 +43,7 @@ def _concept_html(card: dict) -> str:
     meta = (f"<span class=pill>{len(card['informants'])} informants</span><span class=pill>{card['n_quotes']} quotes</span>"
             + (f"<span class=pill>informant words {il:.0%}</span>" if il is not None else ""))
     quotes = "".join(
-        (f"<div class=q>Q: {e(q['question'][:240])}</div>" if q.get("question") else "")
+        (f"<div class=q>{e(q.get('question_tag', 'Q'))}: {e(q['question'][:240])}</div>" if q.get("question") else "")
         + f"<blockquote>{e(q['text'])}<div class='muted small'>{e(q['segment'])}</div></blockquote>"
         for q in card["quotes"]
     )
