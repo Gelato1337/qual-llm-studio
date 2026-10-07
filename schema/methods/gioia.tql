@@ -1,0 +1,34 @@
+# Gioia methodology (Gioia, Corley & Hamilton 2013) on top of core.tql.
+# What the database guarantees; how to do the analysis is in methods/gioia.md.
+
+define
+
+  attribute in-vivo, value string;          # the informant's own term
+
+  # 1st-order concept: informant-centric, at least one verified quote (from core `code`).
+  entity concept sub code,
+    owns in-vivo,
+    plays theme-membership:concept @card(0..1);      # in at most one theme
+
+  # 2nd-order theme: researcher-centric, groups at least two concepts.
+  entity theme sub category,
+    plays theme-membership:theme @card(2..),
+    plays dimension-membership:theme @card(0..1);    # in at most one dimension
+
+  # aggregate dimension: groups at least one theme.
+  entity dimension sub category,
+    plays dimension-membership:dimension @card(1..);
+
+  relation theme-membership, relates theme, relates concept,
+    owns reason @card(1..1), owns actor, owns event;
+  relation dimension-membership, relates dimension, relates theme,
+    owns reason @card(1..1), owns actor, owns event;
+
+  # context packs: everything that supports a theme, for a model that cannot hold the interviews.
+  fun theme_quotes($t: theme) -> { quote }:
+    match theme-membership (theme: $t, concept: $c); evidence (claim: $c, quote: $q);
+    return { $q };
+
+  fun dimension_quotes($d: dimension) -> { quote }:
+    match dimension-membership (dimension: $d, theme: $t); let $q in theme_quotes($t);
+    return { $q };

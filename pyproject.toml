@@ -19,6 +19,7 @@ anthropic = ["anthropic>=1.11"]
 openai = ["openai>=1.50"]
 docling = ["docling>=2.100"]
 mcp = ["mcp>=1.10"]
+typedb = ["typedb-driver>=3.12"]
 all = ["anthropic>=1.11", "openai>=1.50", "docling>=2.100", "mcp>=1.10"]
 dev = ["pytest>=8"]
 
