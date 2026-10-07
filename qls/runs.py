@@ -10,7 +10,7 @@ KEEP = ("all", "concepts")
 
 
 def fork(project: Project, src_id: str, new_id: str | None, keep: str = "all", kind: str | None = None,
-         actor: str = "human", note: str = "") -> Run:
+         actor: str = "human", note: str = "", replace_unfinished: bool = False) -> Run:
     """Copy a run's state into a new run.
 
     keep="concepts" drops themes, dimensions and memos: use it for an
@@ -24,7 +24,7 @@ def fork(project: Project, src_id: str, new_id: str | None, keep: str = "all", k
         s["themes"], s["dimensions"], s["memos"] = {}, {}, {}
     m = src.manifest()
     new = project.new_run(new_id, kind or ("grouping" if keep == "concepts" else m.get("kind", "fork")),
-                          parent=src_id, forked_with=keep, actor=actor, note=note,
+                          parent=src_id, replace_unfinished=replace_unfinished, forked_with=keep, actor=actor, note=note,
                           upstream=m.get("upstream", []) + [{"run": src_id, "kind": m.get("kind"), "corpus_hash": m.get("corpus_hash")}])
     s["run"] = new.id
     new.save_state(s)

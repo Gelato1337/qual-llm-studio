@@ -480,6 +480,18 @@ def cmd_analyst(a):
     print("runs: " + " ".join(r.id for r in runs))
 
 
+def cmd_external(a):
+    p = _project(a)
+    d = p.root / "external"
+    reqs = sorted((d / "requests").glob("*.md")) if (d / "requests").exists() else []
+    rows = [{"request": str(r.relative_to(p.root)), "answered": (d / "answers" / f"{r.stem}.json").exists()} for r in reqs]
+    if a.json:
+        return _print(rows, True)
+    for r in rows:
+        print(f"{'done   ' if r['answered'] else 'PENDING'} {r['request']}")
+    print(f"({sum(not r['answered'] for r in rows)} pending, {sum(r['answered'] for r in rows)} answered)")
+
+
 def cmd_guide(a):
     from .coding import load_prompt
 
@@ -709,6 +721,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--timeout", type=int, default=3600)
     sp.add_argument("--dry-run", action="store_true", help="prepare runs and print the command only")
 
+    add("external", cmd_external, help="list model requests waiting for an external answer")
     add("guide", cmd_guide, help="print the agent-oriented command reference")
     add("mcp", cmd_mcp, help="run the MCP server (stdio)")
     return ap
@@ -723,6 +736,15 @@ def main(argv: list[str] | None = None) -> None:
     try:
         a.fn(a)
     except QlsError as exc:
+        from .llm import PendingAnswers
+
+        if isinstance(exc, PendingAnswers):
+            print(f"waiting: {len(exc.requests)} model request(s) need an answer:", file=sys.stderr)
+            for r in exc.requests:
+                print(f"  {r}", file=sys.stderr)
+            print("Write each answer as JSON to external/answers/<same name>.json, then rerun the same command.",
+                  file=sys.stderr)
+            sys.exit(3)
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(2)
 

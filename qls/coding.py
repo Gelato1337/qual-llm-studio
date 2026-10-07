@@ -16,7 +16,7 @@ from importlib import resources
 from typing import Callable
 
 from .grounding import ground
-from .llm import LLM, LLMError, make_llm
+from .llm import LLM, LLMError, PendingAnswers, make_llm
 from .ops import Ops
 from .project import Project, QlsError, Run, sha256_text
 from .runs import fork
@@ -123,7 +123,14 @@ def load_prompt(name: str) -> str:
 def llm_config(project: Project, **overrides) -> dict:
     cfg = dict(project.config.get("llm", {}))
     cfg.update({k: v for k, v in overrides.items() if v is not None})
+    cfg.setdefault("external_dir", str(project.root / "external"))
     return cfg
+
+
+def waiting(run: Run, pending: list[str]) -> PendingAnswers:
+    """Mark a run as waiting for external answers; rerunning the same command replaces it."""
+    run.update_manifest(status="waiting", pending=pending)
+    return PendingAnswers(pending)
 
 
 def _content_words(s: str) -> set[str]:
@@ -189,12 +196,12 @@ def code_corpus(project: Project, run_id: str | None = None, docs: list[str] | N
     if not doc_ids:
         raise QlsError("No documents ingested. Run `qls ingest <files>` first.")
 
-    run = project.new_run(run_id, "coding", stage=1, llm=llm.describe(), prompt_hash=prompt_hash,
+    run = project.new_run(run_id, "coding", replace_unfinished=True, stage=1, llm=llm.describe(), prompt_hash=prompt_hash,
                           passes=passes, quote_threshold=threshold, docs=doc_ids, concept_memos=with_memo, status="running")
     model = llm.cfg.get("model")
     ops = Ops(run, actor="pipeline", model=model, prompt_hash=prompt_hash)
     calls, stats = [], {"concepts": 0, "quotes_ok": 0, "quotes_failed": 0, "exact": 0, "normalized": 0, "fuzzy": 0, "recovered_on_retry": 0}
-    failures = []
+    failures, pending_all = [], []
 
     for doc_id in doc_ids:
         doc = project.doc(doc_id)
@@ -204,6 +211,9 @@ def code_corpus(project: Project, run_id: str | None = None, docs: list[str] | N
                 log(f"  coding {doc_id} pass {p}" + (f" part {ci}" if ci > 1 else "") + " ...")
                 try:
                     res = llm.json(system, user, schema, "first_order_concepts")
+                except PendingAnswers as pa:
+                    pending_all += pa.requests
+                    continue
                 except LLMError as exc:
                     run.update_manifest(status="failed", error=f"{doc_id}: {exc}")
                     raise
@@ -250,10 +260,16 @@ def code_corpus(project: Project, run_id: str | None = None, docs: list[str] | N
                         "Do not repeat concepts that already had a valid quote unless you are adding a corrected quote."
                     )
                     log(f"    {sum(len(c['quotes']) for c in bad)} quote(s) not found, retrying")
-                    res = llm.json(system, retry_user, schema, "first_order_concepts")
+                    try:
+                        res = llm.json(system, retry_user, schema, "first_order_concepts")
+                    except PendingAnswers as pa:
+                        pending_all += pa.requests
+                        break
                     calls.append({"doc": doc_id, "pass": p, "part": ci, "retry": attempt + 1, **res.meta})
                     pending = res.data.get("concepts", [])
 
+    if pending_all:
+        raise waiting(run, pending_all)
     run.update_manifest(status="done", calls=calls, grounding=stats, ungrounded=failures,
                         served_models=sorted({c.get("model_served") for c in calls if c.get("model_served")}))
     log(f"  {stats['concepts']} concepts, {stats['quotes_ok']} quotes grounded, {stats['quotes_failed']} rejected")
@@ -272,7 +288,7 @@ def _norm_label(s: str) -> str:
 def consolidate(project: Project, run_id: str, into: str | None = None, use_model: bool = True,
                 llm: LLM | None = None, log: Log = print) -> Run:
     run = fork(project, run_id, into, keep="concepts", kind="consolidation", actor="pipeline",
-               note="stage 2: consolidate 1st-order concepts") if into else project.run(run_id)
+               note="stage 2: consolidate 1st-order concepts", replace_unfinished=True) if into else project.run(run_id)
     label_language = project.cfg("project", "label_language", "English")
     system = load_prompt("consolidate").replace("{label_language}", label_language)
     prompt_hash = sha256_text(system)
@@ -308,7 +324,10 @@ def consolidate(project: Project, run_id: str, into: str | None = None, use_mode
             )
         user = f"{project.context_text()}\n\n<concepts>\n" + "\n".join(lines) + "\n</concepts>\n\nPropose merges."
         log(f"  asking model about {len(active)} concepts ...")
-        res = llm.json(system, user, MERGES_SCHEMA, "concept_merges")
+        try:
+            res = llm.json(system, user, MERGES_SCHEMA, "concept_merges")
+        except PendingAnswers as pa:
+            raise waiting(run, pa.requests) if into else pa
         applied, rejected, used = 0, [], set()
         with ops.batch():
             for m in res.data.get("merges", []):

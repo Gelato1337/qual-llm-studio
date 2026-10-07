@@ -40,7 +40,9 @@ def make_llm(cfg: dict) -> "LLM":
         return OpenAILLM(cfg)
     if provider == "mock":
         return MockLLM(cfg)
-    raise QlsError(f"Unknown llm.provider {provider!r} (anthropic | openai | mock)")
+    if provider == "external":
+        return ExternalLLM(cfg)
+    raise QlsError(f"Unknown llm.provider {provider!r} (anthropic | openai | external | mock)")
 
 
 class LLM:
@@ -182,6 +184,61 @@ class OpenAILLM(LLM):
         if choice.finish_reason == "length":
             raise LLMError("Output truncated (finish_reason=length). Raise llm.max_tokens.")
         return LLMResult(parse_json(text), text, meta)
+
+
+# ---------------------------------------------------------------------------
+# External: requests and answers as files
+# ---------------------------------------------------------------------------
+
+
+class PendingAnswers(LLMError):
+    """One or more model requests are waiting for an answer file."""
+
+    def __init__(self, requests: list[str]):
+        self.requests = list(requests)
+        super().__init__(f"{len(self.requests)} model request(s) waiting for an answer")
+
+
+class ExternalLLM(LLM):
+    """The model is whoever answers the request files.
+
+    Each call writes <dir>/requests/<name>-<hash>.md (system prompt, input,
+    JSON schema). The answer goes to <dir>/answers/<name>-<hash>.json.
+    Rerunning the same command picks answers up. The hash covers the full
+    request, so a changed prompt or input never reuses an old answer.
+
+    Use it when no API key is available but an assistant is (Claude Code or
+    Cowork answering with its own model), or to replay recorded answers.
+    Set `model` to say who answers, e.g. "external:claude-code-session".
+    """
+
+    def __init__(self, cfg: dict):
+        super().__init__(cfg)
+        from pathlib import Path
+
+        self.dir = Path(cfg["external_dir"])
+
+    def json(self, system: str, user: str, schema: dict, name: str) -> LLMResult:
+        import hashlib
+
+        payload = json.dumps({"name": name, "system": system, "user": user, "schema": schema}, sort_keys=True, ensure_ascii=False)
+        key = f"{name}-{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]}"
+        ans = self.dir / "answers" / f"{key}.json"
+        if ans.exists():
+            text = ans.read_text(encoding="utf-8")
+            return LLMResult(parse_json(text), text, {"provider": "external", "model_requested": self.cfg.get("model"),
+                                                      "model_served": self.cfg.get("model"), "answer": f"answers/{key}.json"})
+        req = self.dir / "requests" / f"{key}.md"
+        if not req.exists():
+            req.parent.mkdir(parents=True, exist_ok=True)
+            (self.dir / "answers").mkdir(parents=True, exist_ok=True)
+            req.write_text(
+                f"# Model request `{key}`\n\nAnswer with JSON only, matching the schema at the end, and save it as\n"
+                f"`answers/{key}.json` next to this folder.\n\n## System prompt\n\n{system}\n\n## Input\n\n{user}\n\n"
+                f"## JSON schema\n\n```json\n{json.dumps(schema, indent=1, ensure_ascii=False)}\n```\n",
+                encoding="utf-8",
+            )
+        raise PendingAnswers([str(req)])
 
 
 # ---------------------------------------------------------------------------

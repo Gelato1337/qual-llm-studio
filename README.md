@@ -32,6 +32,8 @@ You need **one** of:
 - an LLM API key: `ANTHROPIC_API_KEY` (default, Claude Opus 5.5), or any OpenAI-compatible endpoint set in `qls.toml` (`provider = "openai"`, `base_url`, `model`, e.g. OpenAI, OpenRouter, vLLM or Ollama);
 - your own compute running an OpenAI-compatible server (vLLM/Ollama on a GPU machine or LUMI), so no interview data leaves your infrastructure.
 
+No key and no compute? Set `provider = "external"` (and `model = "external:<who answers>"`). Each model call is written to `external/requests/<name>.md`; whoever answers (Claude Code or Cowork with its own model, or a person) saves JSON to `external/answers/<name>.json`, and rerunning the same command continues. `qls external` lists what is pending. Answers are keyed by a hash of the full request, so they double as a replay record.
+
 Audio is transcribed by Docling with Whisper (no speaker separation); for interviews, a diarized transcript from WhisperX or AssemblyAI is better input. See the roadmap.
 
 ## Quick start

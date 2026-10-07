@@ -57,8 +57,10 @@ max_retries = 2
 concept_memos = true
 
 [llm]
-# anthropic | openai | mock
+# anthropic | openai | external | mock
 #   openai covers any OpenAI-compatible endpoint: OpenAI, OpenRouter, vLLM, Ollama.
+#   external writes each request to external/requests/ and reads the answer from
+#   external/answers/ (an assistant without an API key, or replaying old answers).
 provider = "anthropic"
 model = "claude-opus-5-5"
 # Anthropic: low | medium | high | xhigh | max
@@ -263,11 +265,16 @@ class Project:
             raise QlsError(f"Unknown run {run_id!r}. Known: {', '.join(self.run_ids()) or 'none'}")
         return r
 
-    def new_run(self, run_id: str | None, kind: str, parent: str | None = None, **manifest: Any) -> "Run":
+    def new_run(self, run_id: str | None, kind: str, parent: str | None = None, replace_unfinished: bool = False,
+                **manifest: Any) -> "Run":
         run_id = run_id or f"{kind}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
         if not NAME_RE.match(run_id):
             raise QlsError(f"Invalid run name {run_id!r}: use letters, digits, '-', '_' or '.'")
         r = Run(self, run_id)
+        if r.exists() and replace_unfinished and r.manifest().get("status") in ("waiting", "failed", "running"):
+            import shutil
+
+            shutil.rmtree(r.dir)  # an unfinished attempt is redone from scratch (answers are cached)
         if r.exists():
             raise QlsError(f"Run {run_id!r} already exists.")
         r.dir.mkdir(parents=True)

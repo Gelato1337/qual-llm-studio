@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import html
 
-from .coding import concepts_schema, llm_config, load_prompt, _transcript_block, MEMO_FIELDS, MEMO_INSTRUCTIONS
+from .coding import concepts_schema, llm_config, load_prompt, waiting, _transcript_block, MEMO_FIELDS, MEMO_INSTRUCTIONS
 from .grounding import ground
-from .llm import LLM, make_llm
+from .llm import LLM, PendingAnswers, make_llm
 from .ops import Ops
 from .project import Project, QlsError, Run, sha256_text
 from .runs import fork
@@ -101,7 +101,8 @@ def group(project: Project, source: str, into: str | None = None, view: str = "m
     system = load_prompt("grouping").replace("{label_language}", label_language)
     vsystem = load_prompt("verify").replace("{label_language}", label_language)
     run = fork(project, source, into or f"{source}-group-{view}{'-v' if verify else ''}", keep="concepts",
-               kind="grouping", actor="pipeline", note=f"fixed grouping, view={view}, verify={verify}")
+               kind="grouping", actor="pipeline", note=f"fixed grouping, view={view}, verify={verify}",
+               replace_unfinished=True)
     ops = Ops(run, actor="pipeline", model=llm.cfg.get("model"), prompt_hash=sha256_text(system))
     calls, problems = [], {"unknown_concepts": [], "double_assigned": [], "unknown_theme_keys": []}
 
@@ -110,7 +111,10 @@ def group(project: Project, source: str, into: str | None = None, view: str = "m
     user = (f"{project.context_text()}\n\n<concepts view=\"{view}\">\n{listing}\n</concepts>\n\n"
             "Group these 1st-order concepts into 2nd-order themes and aggregate dimensions.")
     log(f"  grouping {len(active(ops.s, 'concepts'))} concepts (view={view}) ...")
-    res = llm.json(system, user, GROUPING_SCHEMA, "gioia_grouping")
+    try:
+        res = llm.json(system, user, GROUPING_SCHEMA, "gioia_grouping")
+    except PendingAnswers as pa:
+        raise waiting(run, pa.requests)
     calls.append({"step": "group", **res.meta})
     keys: dict[str, str] = {}
     with ops.batch():
@@ -136,30 +140,40 @@ def group(project: Project, source: str, into: str | None = None, view: str = "m
         if res.data.get("notes", "").strip():
             ops.add_memo(res.data["notes"], [], kind="summary")
 
-    # return to data
+    # return to data: every theme is checked against the same post-grouping state, then
+    # every dimension against the state after theme checks (requests within a level are
+    # independent, so external answerers can work through them in any order)
     changes = {"relabelled": 0, "moved": 0, "unassigned": 0}
     if verify:
-        for kind, items in (("theme", lambda: active(ops.s, "themes")), ("dimension", lambda: active(ops.s, "dimensions"))):
-            for item in list(items()):
-                if item["status"] != "active":
-                    continue
+        for kind in ("theme", "dimension"):
+            items = active(ops.s, "themes" if kind == "theme" else "dimensions")
+            results, pending = {}, []
+            for item in items:
                 pack = context_pack(project, ops.s, [item["id"]], max_chars=int(project.cfg("grouping", "verify_chars", 20000)))
                 vuser = (f"{project.context_text()}\n\nYou are checking {kind} {item['id']}.\n\n{pack}\n\n"
                          f"Alternative places (for move_to):\n{_alternatives(ops.s, kind, item['id'])}")
                 log(f"  verifying {kind} {item['id']} against the data ...")
-                v = llm.json(vsystem, vuser, VERIFY_SCHEMA, f"{kind}_check")
+                try:
+                    results[item["id"]] = llm.json(vsystem, vuser, VERIFY_SCHEMA, f"{kind}_check")
+                except PendingAnswers as pa:
+                    pending += pa.requests
+            if pending:
+                raise waiting(run, pending)
+            for item in items:
+                v = results[item["id"]]
                 calls.append({"step": f"verify {item['id']}", **v.meta})
-                members = item["concepts"] if kind == "theme" else item["themes"]
+                members = list(item["concepts"] if kind == "theme" else item["themes"])
                 with ops.batch():
                     if not v.data.get("label_ok", True) and v.data.get("label", "").strip():
                         rename = ops.rename_theme if kind == "theme" else ops.rename_dimension
-                        ops.with_evidence(list(members))
+                        ops.with_evidence(members)
                         rename(item["id"], v.data["label"], v.data.get("definition") or None,
                                f"return to data: {v.data.get('reason') or 'label more specific than before'}")
                         changes["relabelled"] += 1
                     for mf in v.data.get("misfits", []):
                         mid, target = mf.get("id"), (mf.get("move_to") or "").strip()
-                        if mid not in members:
+                        current = item["concepts"] if kind == "theme" else item["themes"]
+                        if mid not in members or mid not in current:
                             continue
                         why = f"return to data: {mf.get('why', '').strip() or 'does not fit'}"
                         ops.add_memo(f"{mid} does not fit {item['id']} ({item['label']}): {mf.get('why', '')}",
@@ -219,12 +233,15 @@ def oneshot(project: Project, run_id: str | None = None, llm: LLM | None = None,
     if not docs:
         raise QlsError("No documents ingested.")
     threshold = float(project.cfg("coding", "quote_threshold", 90))
-    run = project.new_run(run_id, "oneshot", stage=1, llm=llm.describe(), prompt_hash=sha256_text(system),
+    run = project.new_run(run_id, "oneshot", replace_unfinished=True, stage=1, llm=llm.describe(), prompt_hash=sha256_text(system),
                           docs=[d["id"] for d in docs], concept_memos=with_memo, status="running")
     user = project.context_text() + "\n\n" + "\n\n".join(_transcript_block(d, d["segments"]) for d in docs)
     user += "\n\nDo the full analysis."
     log(f"  one call over {len(docs)} transcripts ({len(user)} characters) ...")
-    res = llm.json(system, user, oneshot_schema(with_memo), "oneshot")
+    try:
+        res = llm.json(system, user, oneshot_schema(with_memo), "oneshot")
+    except PendingAnswers as pa:
+        raise waiting(run, pa.requests)
     ops = Ops(run, actor="pipeline", model=llm.cfg.get("model"), prompt_hash=sha256_text(system))
     segs_by_doc = {d["id"]: d["segments"] for d in docs}
     all_segs = [s for d in docs for s in d["segments"]]
