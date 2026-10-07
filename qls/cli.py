@@ -14,6 +14,9 @@ Researcher / experimenter:
     qls compare RUN_A RUN_B
     qls recipes | recipe NAME | guide
     qls mcp --run RUN --actor agent:NAME       MCP server for a harness
+    qls agent prompt RUN --actor agent:NAME [--step code] [--sources P01 P02] [--transport mcp|shell]
+    qls agent mcp-config RUN --actor agent:NAME [--model M]   .mcp.json entry (Claude Code, Cowork)
+    qls agent pi RUN --actor agent:NAME --provider P --model M  launch pi with the shell transport
 
 Agents in a shell (pi, scripts):
     qls tool RUN NAME '{"json": "args"}'      actor from --actor or $QLS_ACTOR
@@ -248,6 +251,26 @@ def cmd_mcp(a):
     main(a.project, a.run, a.actor or os.environ.get("QLS_ACTOR"), a.model, a.readonly)
 
 
+def cmd_agent_prompt(a):
+    from .agent import task_prompt
+
+    _out(task_prompt(_p(a), a.run, a.actor, a.step, a.sources, a.transport))
+
+
+def cmd_agent_mcp_config(a):
+    from .agent import mcp_config
+
+    _out(mcp_config(_p(a), a.run, a.actor, a.model))
+
+
+def cmd_agent_pi(a):
+    from .agent import launch_pi
+
+    info = launch_pi(_p(a), a.run, a.actor, a.provider, a.model, a.thinking, a.step, a.sources, a.pi, a.timeout,
+                     log=lambda m: print(m, file=sys.stderr))
+    _out(info)
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--project", help="project folder (default: search upwards or $QLS_PROJECT)")
@@ -323,6 +346,24 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--actor")
     sp.add_argument("--model")
     sp.add_argument("--readonly", action="store_true", help="read tools only (reviewers)")
+
+    agent = sub.add_parser("agent", help="attach an agent to a run").add_subparsers(dest="sub", required=True)
+    for name, fn in (("prompt", cmd_agent_prompt), ("mcp-config", cmd_agent_mcp_config), ("pi", cmd_agent_pi)):
+        sp = agent.add_parser(name, parents=[common])
+        sp.set_defaults(fn=fn)
+        sp.add_argument("run")
+        sp.add_argument("--actor", required=True)
+        if name != "mcp-config":
+            sp.add_argument("--step", action="append", help="recipe step id (repeatable; default: all)")
+            sp.add_argument("--sources", nargs="+")
+        if name != "prompt":
+            sp.add_argument("--model", required=name == "pi")
+    agent.choices["prompt"].add_argument("--transport", choices=["mcp", "shell"], default="mcp")
+    sp = agent.choices["pi"]
+    sp.add_argument("--provider", required=True)
+    sp.add_argument("--thinking", default="high")
+    sp.add_argument("--pi", default="pi", help="pi executable")
+    sp.add_argument("--timeout", type=int, default=7200)
     return ap
 
 

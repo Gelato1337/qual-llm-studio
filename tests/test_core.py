@@ -167,3 +167,29 @@ def test_mcp_server_tools(p):
 
     with pytest.raises(QlsError):
         main(str(p.root), "r1", "human:anna")
+
+
+def test_agent_prompt_and_config(p):
+    import json
+
+    from qls.agent import mcp_config, source_order, task_prompt
+
+    txt = task_prompt(p, "r1", "agent:a", steps=["code"], transport="shell")
+    assert "Step `code`" in txt and "Step `themes`" not in txt and "q add_quote" in txt and "P01" in txt
+    assert "ways_of_working()" in task_prompt(p, "r1", "agent:a")
+    cfg = mcp_config(p, "r1", "agent:a", "m1")["mcpServers"]["qls"]
+    assert cfg["args"][-4:] == ["--actor", "agent:a", "--model", "m1"] and json.dumps(cfg)
+    with pytest.raises(QlsError):
+        task_prompt(p, "r1", "human:anna")
+    st = p.store
+    st.create_run("s1", "gioia", st.run("r1")["recipe_hash"], {"order_seed": 7})
+    st.create_run("s2", "gioia", st.run("r1")["recipe_hash"], {"order_seed": 7})
+    assert source_order(st, "s1") == source_order(st, "s2") and sorted(source_order(st, "s1")) == sorted(st.source_ids())
+    assert source_order(st, "r1") == list(st.source_ids())
+
+
+def test_cli_agent_prompt(p, capsys):
+    from qls.cli import main
+
+    main(["agent", "prompt", "r1", "--actor", "agent:a", "--step", "code", "--project", str(p.root)])
+    assert "Step `code`" in capsys.readouterr().out
